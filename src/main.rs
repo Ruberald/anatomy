@@ -1,3 +1,5 @@
+mod lexer;
+
 mod vm;
 mod instruction;
 
