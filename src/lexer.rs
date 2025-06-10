@@ -57,10 +57,6 @@ impl Lexer {
         self.position = self.read_position;
         self.read_position += 1;
 
-        println!("pos: {}", self.position);
-        println!("read pos: {}", self.read_position);
-        println!("ch: {}", self.ch.unwrap_or(b'$') as char);
-
     }
 
     fn skip_whitespace(&mut self) {
@@ -69,17 +65,40 @@ impl Lexer {
         }
     }
 
-    fn read_identifier(&mut self) -> Token {
-        let start = self.position;
-        while (self.peek_char().unwrap_or(b' ') as char).is_alphanumeric() || self.peek_char().unwrap_or(b' ') == b'_' {
-            println!("hey");
+    fn lookup_ident(ident: &str) -> TokenType {
+        match ident {
+            "let" => TokenType::LET,
+            "fn" => TokenType::FUNCTION,
+            _ => TokenType::IDENT,
+        }
+    }
 
+    fn read_number(&mut self) -> Token {
+        let start = self.position;
+        while (self.peek_char().unwrap_or(b' ') as char).is_numeric() {
             self.read_char();
         }
 
+        let lit = self.input[start..self.position+1].to_string();
+
         Token {
-            token_type: TokenType::IDENT,
-            literal: Some(self.input[start..self.position+1].to_string()),
+            token_type: TokenType::INT,
+            literal: Some(lit),
+        }
+
+    }
+
+    fn read_identifier(&mut self) -> Token {
+        let start = self.position;
+        while (self.peek_char().unwrap_or(b' ') as char).is_alphanumeric() || self.peek_char().unwrap_or(b' ') == b'_' {
+            self.read_char();
+        }
+
+        let lit = self.input[start..self.position+1].to_string();
+
+        Token {
+            token_type: Self::lookup_ident(lit.as_str()),
+            literal: Some(lit),
         }
 
     }
@@ -94,13 +113,18 @@ impl Lexer {
             Some(b',') => Token { token_type: TokenType::COMMA, literal: None },
             Some(b';') => Token { token_type: TokenType::SEMICOLON, literal: None },
             Some(b'(') => Token { token_type: TokenType::LPAREN, literal: None },
-            Some(b')') => Token { token_type: TokenType::LPAREN, literal: None },
+            Some(b')') => Token { token_type: TokenType::RPAREN, literal: None },
+            Some(b'{') => Token { token_type: TokenType::LBRACE, literal: None },
+            Some(b'}') => Token { token_type: TokenType::RBRACE, literal: None },
+            Some(x) if (x as char).is_numeric() => {
+                self.read_number()
+            }
             Some(x) => {
-                if x == b' ' { println!("bruh"); self.read_char(); }
+                // if x == b' ' { self.read_char(); }
                 self.read_identifier()
             }
 
-            _ => Token { token_type: TokenType::ILLEGAL, literal: None },
+            _ => Token { token_type: TokenType::EOF, literal: None },
         };
 
         self.read_char();
@@ -119,21 +143,84 @@ mod tests {
         let mut lexer = Lexer::new(input);
 
         let expected_tokens = vec![
-            Token { token_type: TokenType::IDENT, literal: Some("let".to_string()) },
+            Token { token_type: TokenType::LET, literal: Some("let".to_string()) },
             Token { token_type: TokenType::IDENT, literal: Some("x".to_string()) },
             Token { token_type: TokenType::ASSIGN, literal: None },
             Token { token_type: TokenType::IDENT, literal: Some("y".to_string()) },
             Token { token_type: TokenType::PLUS, literal: None },
             Token { token_type: TokenType::IDENT, literal: Some("z".to_string()) },
             Token { token_type: TokenType::SEMICOLON, literal: None },
-            Token { token_type: TokenType::ILLEGAL, literal: None },
+            Token { token_type: TokenType::EOF, literal: None },
         ];
 
         for expected in expected_tokens {
             let tok = lexer.next_token();
-            println!("{:?}", tok);
             assert_eq!(tok, expected);
         }
+    }
+
+
+    #[test]
+    fn test_complex_program() {
+        let input = String::from("
+            let five = 5;
+            let ten = 10;
+            let add = fn(x, y) {
+                x + y;
+            };
+            let result = add(five, ten);
+            ");
+            let mut lexer = Lexer::new(input);
+
+            let expected_tokens = vec![
+                Token { token_type: TokenType::LET, literal: Some("let".to_string()) },
+                Token { token_type: TokenType::IDENT, literal: Some("five".to_string()) },
+                Token { token_type: TokenType::ASSIGN, literal: None },
+                Token { token_type: TokenType::INT, literal: Some("5".to_string()) },
+                Token { token_type: TokenType::SEMICOLON, literal: None },
+
+                Token { token_type: TokenType::LET, literal: Some("let".to_string()) },
+                Token { token_type: TokenType::IDENT, literal: Some("ten".to_string()) },
+                Token { token_type: TokenType::ASSIGN, literal: None },
+                Token { token_type: TokenType::INT, literal: Some("10".to_string()) },
+                Token { token_type: TokenType::SEMICOLON, literal: None },
+
+                Token { token_type: TokenType::LET, literal: Some("let".to_string()) },
+                Token { token_type: TokenType::IDENT, literal: Some("add".to_string()) },
+                Token { token_type: TokenType::ASSIGN, literal: None },
+                Token { token_type: TokenType::FUNCTION, literal: Some("fn".to_string()) },
+                Token { token_type: TokenType::LPAREN, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("x".to_string()) },
+                Token { token_type: TokenType::COMMA, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("y".to_string()) },
+                Token { token_type: TokenType::RPAREN, literal: None },
+                Token { token_type: TokenType::LBRACE, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("x".to_string()) },
+                Token { token_type: TokenType::PLUS, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("y".to_string()) },
+                Token { token_type: TokenType::SEMICOLON, literal: None },
+                Token { token_type: TokenType::RBRACE, literal: None },
+                Token { token_type: TokenType::SEMICOLON, literal: None },
+
+                Token { token_type: TokenType::LET, literal: Some("let".to_string()) },
+                Token { token_type: TokenType::IDENT, literal: Some("result".to_string()) },
+                Token { token_type: TokenType::ASSIGN, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("add".to_string()) },
+                Token { token_type: TokenType::LPAREN, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("five".to_string()) },
+                Token { token_type: TokenType::COMMA, literal: None },
+                Token { token_type: TokenType::IDENT, literal: Some("ten".to_string()) },
+                Token { token_type: TokenType::RPAREN, literal: None },
+                Token { token_type: TokenType::SEMICOLON, literal: None },
+
+                Token { token_type: TokenType::EOF, literal: None },
+                ];
+
+            for expected in expected_tokens {
+                let tok = lexer.next_token();
+                println!("{:?}", tok);
+                assert_eq!(tok, expected);
+            }
     }
 }
 
