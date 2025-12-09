@@ -51,7 +51,7 @@ impl From<u8> for Opcode {
             14 => Self::LTQ,
             15 => Self::JEQ,
             16 => Self::JNEQ,
-            _ => Self::IGL
+            _ => Self::IGL,
         }
     }
 }
@@ -72,4 +72,3 @@ mod tests {
         assert_eq!(instruction.opcode, Opcode::HLT);
     }
 }
-
