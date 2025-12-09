@@ -1,5 +1,5 @@
 #[derive(Debug, PartialEq)]
-enum TokenType {
+pub enum TokenType {
     ILLEGAL,
     EOF,
     TRUE,
@@ -35,12 +35,12 @@ enum TokenType {
 }
 
 #[derive(Debug, PartialEq)]
-struct Token {
-    token_type: TokenType,
-    literal: Option<String>,
+pub struct Token {
+    pub token_type: TokenType,
+    pub literal: Option<String>,
 }
 
-struct Lexer {
+pub struct Lexer {
     input: String,
     position: usize,
     read_position: usize,
@@ -48,7 +48,7 @@ struct Lexer {
 }
 
 impl Lexer {
-    fn new(input: String) -> Self {
+    pub fn new(input: String) -> Self {
         let mut l = Lexer {
             input,
             position: 0,
@@ -122,7 +122,7 @@ impl Lexer {
         Self::lookup_ident(&lit)
     }
 
-    fn next_token(&mut self) -> Token {
+    pub fn next_token(&mut self) -> Token {
         self.skip_whitespace();
 
         #[rustfmt::skip]

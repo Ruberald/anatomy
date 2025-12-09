@@ -1,6 +1,8 @@
 use std::io;
 use std::io::Write;
 
+use crate::lexer::Lexer;
+use crate::lexer::TokenType;
 use crate::vm::VM;
 
 pub enum ReplMode {
@@ -110,8 +112,15 @@ impl REPL {
                     }
 
                     ReplMode::Normal => {
-                        println!("Normal mode: input not yet supported.");
-                        todo!("Implement normal mode input parsing.");
+                        let mut lexer = Lexer::new(trim_buffer.to_string());
+
+                        println!("Tokens:");
+                        while let token = lexer.next_token() {
+                            if token.token_type == TokenType::EOF {
+                                break;
+                            }
+                            println!("{:?}", token);
+                        }
                     }
                 },
             }
@@ -178,25 +187,20 @@ mod tests {
         let mut bytes = repl.parse_hex("00 00 00 0A").unwrap();
         repl.vm.program.append(&mut bytes);
 
-        repl.vm.run_once(); // Execute LOAD R0
-
         // LOAD R1 = 20   → 00 01 00 14
         let mut bytes = repl.parse_hex("00 01 00 14").unwrap();
         repl.vm.program.append(&mut bytes);
-
-        repl.vm.run_once(); // Execute LOAD R1
 
         // ADD R2 = R0 + R1 → 01 00 01 02
         let mut bytes = repl.parse_hex("01 00 01 02").unwrap();
         repl.vm.program.append(&mut bytes);
 
-        repl.vm.run_once(); // Execute ADD R2
-
         // HLT → 05
         let mut bytes = repl.parse_hex("05").unwrap();
         repl.vm.program.append(&mut bytes);
 
-        repl.vm.run_once(); // Execute HLT
+        // Run the program
+        repl.vm.run();
 
         // Validate results
         assert_eq!(repl.vm.registers[0], 0x0A, "R0 should be 10");
