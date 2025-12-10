@@ -1,7 +1,9 @@
+mod ast;
 mod lexer;
+mod parser;
 
-mod vm;
 mod instruction;
+mod vm;
 
 mod repl;
 
