@@ -1,10 +1,44 @@
 use crate::ast::*;
 use crate::lexer::*;
 
+#[derive(Debug)]
+pub enum ParserError {
+    ExpectedToken {
+        expected: TokenType,
+        found: TokenType,
+    },
+    MissingIdentifier,
+    MissingAssign,
+}
+
+impl std::fmt::Display for ParserError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ParserError::ExpectedToken { expected, found } => {
+                write!(f, "Expected token {:?}, found {:?}", expected, found)
+            }
+            ParserError::MissingIdentifier => write!(f, "Expected identifier after 'let'"),
+            ParserError::MissingAssign => write!(f, "Expected '=' after identifier"),
+        }
+    }
+}
+
+pub struct ParserErrors(pub Vec<ParserError>);
+
+impl std::fmt::Display for ParserErrors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for error in &self.0 {
+            writeln!(f, "{error}")?;
+        }
+        Ok(())
+    }
+}
+
 pub struct Parser {
     l: Lexer,
     cur_token: Token,
     peek_token: Token,
+    errors: ParserErrors,
 }
 
 impl Parser {
@@ -19,6 +53,7 @@ impl Parser {
                 token_type: TokenType::EOF,
                 literal: None,
             },
+            errors: ParserErrors(Vec::new()),
         };
 
         // Read two tokens, so cur_token and peek_token are both set
@@ -33,20 +68,34 @@ impl Parser {
         self.peek_token = self.l.next_token();
     }
 
-    pub fn expect_peek(&mut self, t: TokenType) -> bool {
+    pub fn errors(&self) -> &ParserErrors {
+        &self.errors
+    }
+
+    pub fn peek_error(&mut self, t: TokenType) {
+        let error = ParserError::ExpectedToken {
+            expected: t,
+            found: self.peek_token.token_type.clone(),
+        };
+        self.errors.0.push(error);
+    }
+
+    fn expect_peek(&mut self, t: TokenType) -> bool {
         if self.peek_token.token_type == t {
             self.next_token();
             true
         } else {
+            self.peek_error(t);
             false
         }
     }
 
-    pub fn parse_let_statement(&mut self) -> Result<Box<dyn Statement>, String> {
+    fn parse_let_statement(&mut self) -> Option<Box<dyn Statement>> {
         let token = self.cur_token.clone();
 
         if !self.expect_peek(TokenType::IDENT) {
-            return Err("expected identifier after let".to_string());
+            self.errors.0.push(ParserError::MissingIdentifier);
+            return None;
         }
 
         let name = Identifier {
@@ -55,7 +104,8 @@ impl Parser {
         };
 
         if !self.expect_peek(TokenType::ASSIGN) {
-            return Err("expected '=' after identifier".to_string());
+            self.errors.0.push(ParserError::MissingAssign);
+            return None;
         }
 
         // Skipping expression parsing for simplicity
@@ -63,7 +113,7 @@ impl Parser {
             self.next_token();
         }
 
-        Ok(Box::new(LetStatement {
+        Some(Box::new(LetStatement {
             token,
             name,
             value: Box::new(Identifier {
@@ -76,27 +126,27 @@ impl Parser {
         }))
     }
 
-    pub fn parse_statement(&mut self) -> Result<Option<Box<dyn Statement>>, String> {
+    fn parse_statement(&mut self) -> Option<Box<dyn Statement>> {
         match self.cur_token.token_type {
-            TokenType::LET => self.parse_let_statement().map(Some),
+            TokenType::LET => self.parse_let_statement(),
             // TokenType::RETURN => self.parse_return_statement().map(Some),
-            _ => Ok(None), // For simplicity, we return None for unrecognized statements
+            _ => None, // For simplicity, we return None for unrecognized statements
         }
     }
 
-    pub fn parse_program(&mut self) -> Result<Program, String> {
+    pub fn parse_program(&mut self) -> Program {
         let mut program = Program {
             statements: Vec::new(),
         };
 
         while self.cur_token.token_type != TokenType::EOF {
-            if let Some(stmt) = self.parse_statement()? {
+            if let Some(stmt) = self.parse_statement() {
                 program.statements.push(stmt);
             }
             self.next_token();
         }
 
-        Ok(program)
+        program
     }
 }
 
@@ -109,32 +159,44 @@ mod tests {
 
     #[test]
     fn test_let_statements() {
-        let input = "
+        let input = r#"
             let x = 5;
             let y = 10;
             let foobar = 838383;
-        ";
+        "#;
 
         let lexer = Lexer::new(input.to_string());
         let mut parser = Parser::new(lexer);
 
-        let program = parser.parse_program().expect("parser error");
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
         assert_eq!(program.statements.len(), 3);
 
         let expected = ["x", "y", "foobar"];
 
         for (stmt, expected_ident) in program.statements.iter().zip(expected.iter()) {
-            test_let_statement(stmt.as_ref(), expected_ident);
+            test_let_statement(&**stmt, expected_ident);
         }
     }
 
+    fn check_parser_errors(parser: &Parser) {
+        let errors = parser.errors();
+        assert!(
+            errors.0.is_empty(),
+            "Parser has {} errors:\n{}",
+            errors.0.len(),
+            errors
+        );
+    }
+
     fn test_let_statement(stmt: &dyn Statement, expected_name: &str) {
-        assert_eq!(stmt.token_type(), TokenType::LET);
+        assert_eq!(stmt.token_type(), TokenType::LET, "Wrong token type");
 
         let let_stmt = stmt
             .as_any()
             .downcast_ref::<LetStatement>()
-            .expect("statement is not a LetStatement");
+            .expect("Expected LetStatement");
 
         assert_eq!(let_stmt.name.value, expected_name);
         assert_eq!(let_stmt.name.token_type(), TokenType::IDENT);
