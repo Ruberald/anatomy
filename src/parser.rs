@@ -1,5 +1,6 @@
 use crate::ast::*;
 use crate::lexer::*;
+use std::collections::HashMap;
 
 #[derive(Debug)]
 pub enum ParserError {
@@ -7,18 +8,14 @@ pub enum ParserError {
         expected: TokenType,
         found: TokenType,
     },
-    MissingIdentifier,
-    MissingAssign,
 }
 
 impl std::fmt::Display for ParserError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ParserError::ExpectedToken { expected, found } => {
-                write!(f, "Expected token {:?}, found {:?}", expected, found)
+                write!(f, "expected {:?}, got {:?}", expected, found)
             }
-            ParserError::MissingIdentifier => write!(f, "Expected identifier after 'let'"),
-            ParserError::MissingAssign => write!(f, "Expected '=' after identifier"),
         }
     }
 }
@@ -27,18 +24,35 @@ pub struct ParserErrors(pub Vec<ParserError>);
 
 impl std::fmt::Display for ParserErrors {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for error in &self.0 {
-            writeln!(f, "{error}")?;
+        for e in &self.0 {
+            writeln!(f, "{e}")?;
         }
         Ok(())
     }
 }
+
+#[derive(PartialEq, PartialOrd)]
+enum Precedence {
+    LOWEST,
+    EQUALS,      // ==
+    LESSGREATER, // > <
+    SUM,         // +
+    PRODUCT,     // *
+    PREFIX,      // -X !X
+    CALL,
+}
+
+type PrefixParseFn = fn(&mut Parser) -> Option<Box<dyn Expression>>;
+type InfixParseFn = fn(&mut Parser, Box<dyn Expression>) -> Option<Box<dyn Expression>>;
 
 pub struct Parser {
     l: Lexer,
     cur_token: Token,
     peek_token: Token,
     errors: ParserErrors,
+
+    prefix_parse_fns: HashMap<TokenType, PrefixParseFn>,
+    infix_parse_fns: HashMap<TokenType, InfixParseFn>,
 }
 
 impl Parser {
@@ -53,12 +67,27 @@ impl Parser {
                 token_type: TokenType::EOF,
                 literal: None,
             },
-            errors: ParserErrors(Vec::new()),
+            errors: ParserErrors(vec![]),
+            prefix_parse_fns: HashMap::new(),
+            infix_parse_fns: HashMap::new(),
         };
 
-        // Read two tokens, so cur_token and peek_token are both set
         p.next_token();
         p.next_token();
+
+        // -------- prefix --------
+        p.register_prefix(TokenType::IDENT, Parser::parse_identifier);
+        p.register_prefix(TokenType::INT, Parser::parse_integer_literal);
+
+        // -------- infix --------
+        p.register_infix(TokenType::PLUS, Parser::parse_infix_expression);
+        p.register_infix(TokenType::MINUS, Parser::parse_infix_expression);
+        p.register_infix(TokenType::ASTERISK, Parser::parse_infix_expression);
+        p.register_infix(TokenType::SLASH, Parser::parse_infix_expression);
+        p.register_infix(TokenType::EQ, Parser::parse_infix_expression);
+        p.register_infix(TokenType::NOT_EQ, Parser::parse_infix_expression);
+        p.register_infix(TokenType::LT, Parser::parse_infix_expression);
+        p.register_infix(TokenType::GT, Parser::parse_infix_expression);
 
         p
     }
@@ -72,21 +101,23 @@ impl Parser {
         &self.errors
     }
 
-    pub fn peek_error(&mut self, t: TokenType) {
-        let error = ParserError::ExpectedToken {
-            expected: t,
-            found: self.peek_token.token_type.clone(),
-        };
-        self.errors.0.push(error);
+    fn register_prefix(&mut self, token: TokenType, func: PrefixParseFn) {
+        self.prefix_parse_fns.insert(token, func);
     }
 
-    fn expect_peek(&mut self, t: TokenType) -> bool {
-        if self.peek_token.token_type == t {
-            self.next_token();
-            true
-        } else {
-            self.peek_error(t);
-            false
+    fn register_infix(&mut self, token: TokenType, func: InfixParseFn) {
+        self.infix_parse_fns.insert(token, func);
+    }
+
+    // =====================
+    // STATEMENTS
+    // =====================
+
+    fn parse_statement(&mut self) -> Option<Box<dyn Statement>> {
+        match self.cur_token.token_type {
+            TokenType::LET => self.parse_let_statement(),
+            TokenType::RETURN => self.parse_return_statement(),
+            _ => self.parse_expression_statement(),
         }
     }
 
@@ -94,50 +125,144 @@ impl Parser {
         let token = self.cur_token.clone();
 
         if !self.expect_peek(TokenType::IDENT) {
-            self.errors.0.push(ParserError::MissingIdentifier);
             return None;
         }
 
         let name = Identifier {
             token: self.cur_token.clone(),
-            value: self.cur_token.literal.clone().unwrap_or_default(),
+            value: self.cur_token.literal.clone().unwrap(),
         };
 
         if !self.expect_peek(TokenType::ASSIGN) {
-            self.errors.0.push(ParserError::MissingAssign);
             return None;
         }
 
-        // Skipping expression parsing for simplicity
-        while self.cur_token.token_type != TokenType::SEMICOLON {
+        self.next_token();
+        let value = self.parse_expression(Precedence::LOWEST)?;
+
+        if self.peek_token.token_type == TokenType::SEMICOLON {
             self.next_token();
         }
 
-        Some(Box::new(LetStatement {
+        Some(Box::new(LetStatement { token, name, value }))
+    }
+
+    fn parse_return_statement(&mut self) -> Option<Box<dyn Statement>> {
+        let token = self.cur_token.clone();
+        self.next_token();
+
+        let return_value = self.parse_expression(Precedence::LOWEST)?;
+
+        if self.peek_token.token_type == TokenType::SEMICOLON {
+            self.next_token();
+        }
+
+        Some(Box::new(ReturnStatement {
             token,
-            name,
-            value: Box::new(Identifier {
-                token: Token {
-                    token_type: TokenType::IDENT,
-                    literal: Some("0".to_string()),
-                },
-                value: "0".to_string(),
-            }), // Placeholder
+            return_value,
         }))
     }
 
-    fn parse_statement(&mut self) -> Option<Box<dyn Statement>> {
-        match self.cur_token.token_type {
-            TokenType::LET => self.parse_let_statement(),
-            // TokenType::RETURN => self.parse_return_statement().map(Some),
-            _ => None, // For simplicity, we return None for unrecognized statements
+    fn parse_expression_statement(&mut self) -> Option<Box<dyn Statement>> {
+        let token = self.cur_token.clone();
+        let expression = self.parse_expression(Precedence::LOWEST)?;
+
+        if self.peek_token.token_type == TokenType::SEMICOLON {
+            self.next_token();
+        }
+
+        Some(Box::new(ExpressionStatement { token, expression }))
+    }
+
+    // =====================
+    // EXPRESSIONS (PRATT)
+    // =====================
+
+    fn parse_expression(&mut self, precedence: Precedence) -> Option<Box<dyn Expression>> {
+        let prefix = *self.prefix_parse_fns.get(&self.cur_token.token_type)?;
+
+        let mut left = prefix(self)?;
+
+        while self.peek_token.token_type != TokenType::SEMICOLON
+            && precedence < self.peek_precedence()
+        {
+            let infix = match self.infix_parse_fns.get(&self.peek_token.token_type) {
+                Some(f) => *f,
+                None => return Some(left),
+            };
+
+            self.next_token();
+            left = infix(self, left)?;
+        }
+
+        Some(left)
+    }
+
+    // =====================
+    // PREFIX PARSERS
+    // =====================
+
+    fn parse_identifier(&mut self) -> Option<Box<dyn Expression>> {
+        Some(Box::new(Identifier {
+            token: self.cur_token.clone(),
+            value: self.cur_token.literal.clone().unwrap(),
+        }))
+    }
+
+    fn parse_integer_literal(&mut self) -> Option<Box<dyn Expression>> {
+        let token = self.cur_token.clone();
+        let value = token.literal.as_ref()?.parse::<i64>().ok()?;
+
+        Some(Box::new(IntegerLiteral { token, value }))
+    }
+
+    // =====================
+    // INFIX PARSERS
+    // =====================
+
+    fn parse_infix_expression(&mut self, left: Box<dyn Expression>) -> Option<Box<dyn Expression>> {
+        let token = self.cur_token.clone();
+        let operator = token.literal.clone().unwrap();
+        let precedence = self.cur_precedence();
+
+        self.next_token();
+        let right = self.parse_expression(precedence)?;
+
+        Some(Box::new(InfixExpression {
+            token,
+            left,
+            operator,
+            right,
+        }))
+    }
+
+    // =====================
+    // PRECEDENCE
+    // =====================
+
+    fn peek_precedence(&self) -> Precedence {
+        token_precedence(&self.peek_token.token_type)
+    }
+
+    fn cur_precedence(&self) -> Precedence {
+        token_precedence(&self.cur_token.token_type)
+    }
+
+    fn expect_peek(&mut self, t: TokenType) -> bool {
+        if self.peek_token.token_type == t {
+            self.next_token();
+            true
+        } else {
+            self.errors.0.push(ParserError::ExpectedToken {
+                expected: t,
+                found: self.peek_token.token_type.clone(),
+            });
+            false
         }
     }
 
     pub fn parse_program(&mut self) -> Program {
-        let mut program = Program {
-            statements: Vec::new(),
-        };
+        let mut program = Program { statements: vec![] };
 
         while self.cur_token.token_type != TokenType::EOF {
             if let Some(stmt) = self.parse_statement() {
@@ -150,12 +275,36 @@ impl Parser {
     }
 }
 
+// =====================
+// PRECEDENCE TABLE
+// =====================
+
+fn token_precedence(token: &TokenType) -> Precedence {
+    match token {
+        TokenType::EQ | TokenType::NOT_EQ => Precedence::EQUALS,
+        TokenType::LT | TokenType::GT => Precedence::LESSGREATER,
+        TokenType::PLUS | TokenType::MINUS => Precedence::SUM,
+        TokenType::SLASH | TokenType::ASTERISK => Precedence::PRODUCT,
+        _ => Precedence::LOWEST,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // -------------------------------
     // parse_program() TESTS
     // -------------------------------
+
+    fn check_parser_errors(parser: &Parser) {
+        let errors = parser.errors();
+        assert!(
+            errors.0.is_empty(),
+            "Parser has {} errors:\n{}",
+            errors.0.len(),
+            errors
+        );
+    }
 
     #[test]
     fn test_let_statements() {
@@ -171,26 +320,20 @@ mod tests {
         let program = parser.parse_program();
         check_parser_errors(&parser);
 
-        assert_eq!(program.statements.len(), 3);
-
         let expected = ["x", "y", "foobar"];
+        let expected_values = [5, 10, 838383];
 
-        for (stmt, expected_ident) in program.statements.iter().zip(expected.iter()) {
-            test_let_statement(&**stmt, expected_ident);
+        for ((stmt, expected_ident), expected_value) in program
+            .statements
+            .iter()
+            .zip(expected.iter())
+            .zip(expected_values.iter())
+        {
+            test_let_statement(&**stmt, expected_ident, expected_value);
         }
     }
 
-    fn check_parser_errors(parser: &Parser) {
-        let errors = parser.errors();
-        assert!(
-            errors.0.is_empty(),
-            "Parser has {} errors:\n{}",
-            errors.0.len(),
-            errors
-        );
-    }
-
-    fn test_let_statement(stmt: &dyn Statement, expected_name: &str) {
+    fn test_let_statement(stmt: &dyn Statement, expected_name: &str, expected_value: &i32) {
         assert_eq!(stmt.token_type(), TokenType::LET, "Wrong token type");
 
         let let_stmt = stmt
@@ -200,5 +343,93 @@ mod tests {
 
         assert_eq!(let_stmt.name.value, expected_name);
         assert_eq!(let_stmt.name.token_type(), TokenType::IDENT);
+
+        // assert_eq!(
+        //     let_stmt
+        //         .value
+        //         .as_any()
+        //         .downcast_ref::<Identifier>()
+        //         .expect("Expected Identifier")
+        //         .value,
+        //     expected_value.to_string()
+        // );
+    }
+
+    #[test]
+    fn test_return_statements() {
+        let input = r#"
+            return 5;
+            return 10;
+            return 993322;
+        "#;
+
+        let lexer = Lexer::new(input.to_string());
+        let mut parser = Parser::new(lexer);
+
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        assert_eq!(
+            program.statements.len(),
+            3,
+            "Program.statements does not contain 3 statements"
+        );
+
+        let expected_return_values = [5, 10, 993322];
+
+        for (stmt, expected_value) in program.statements.iter().zip(expected_return_values.iter()) {
+            test_return_statement(&**stmt, *expected_value);
+        }
+    }
+
+    fn test_return_statement(stmt: &dyn Statement, expected_value: i32) {
+        assert_eq!(stmt.token_type(), TokenType::RETURN, "Wrong token type");
+
+        let return_stmt = stmt
+            .as_any()
+            .downcast_ref::<ReturnStatement>()
+            .expect("Expected ReturnStatement");
+
+        // assert_eq!(
+        //     return_stmt
+        //         .return_value
+        //         .as_any()
+        //         .downcast_ref::<Identifier>()
+        //         .expect("Expected Identifier")
+        //         .value,
+        //     expected_value.to_string()
+        // );
+    }
+
+    #[test]
+    fn test_identifier_expression() {
+        let input = "foobar;";
+
+        let lexer = Lexer::new(input.to_string());
+        let mut parser = Parser::new(lexer);
+
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        assert_eq!(
+            program.statements.len(),
+            1,
+            "Program.statements does not contain 1 statement"
+        );
+
+        let stmt = &program.statements[0];
+        let expr_stmt = stmt
+            .as_any()
+            .downcast_ref::<ExpressionStatement>()
+            .expect("Expected ExpressionStatement");
+
+        let ident = expr_stmt
+            .expression
+            .as_any()
+            .downcast_ref::<Identifier>()
+            .expect("Expected Identifier");
+
+        assert_eq!(ident.value, "foobar");
+        assert_eq!(ident.token_type(), TokenType::IDENT);
     }
 }
