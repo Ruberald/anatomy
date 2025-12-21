@@ -34,6 +34,40 @@ pub enum TokenType {
     IDENT,
 }
 
+impl ToString for TokenType {
+    fn to_string(&self) -> String {
+        match self {
+            TokenType::ILLEGAL => "ILLEGAL".to_string(),
+            TokenType::EOF => "EOF".to_string(),
+            TokenType::TRUE => "true".to_string(),
+            TokenType::FALSE => "false".to_string(),
+            TokenType::PLUS => "+".to_string(),
+            TokenType::COMMA => ",".to_string(),
+            TokenType::BANG => "!".to_string(),
+            TokenType::MINUS => "-".to_string(),
+            TokenType::SLASH => "/".to_string(),
+            TokenType::ASTERISK => "*".to_string(),
+            TokenType::LT => "<".to_string(),
+            TokenType::GT => ">".to_string(),
+            TokenType::EQ => "==".to_string(),
+            TokenType::NOT_EQ => "!=".to_string(),
+            TokenType::INT => "INT".to_string(),
+            TokenType::ASSIGN => "=".to_string(),
+            TokenType::SEMICOLON => ";".to_string(),
+            TokenType::LPAREN => "(".to_string(),
+            TokenType::RPAREN => ")".to_string(),
+            TokenType::LBRACE => "{".to_string(),
+            TokenType::RBRACE => "}".to_string(),
+            TokenType::FUNCTION => "fn".to_string(),
+            TokenType::LET => "let".to_string(),
+            TokenType::IF => "if".to_string(),
+            TokenType::ELSE => "else".to_string(),
+            TokenType::RETURN => "return".to_string(),
+            TokenType::IDENT => "IDENT".to_string(),
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub struct Token {
     pub token_type: TokenType,

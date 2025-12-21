@@ -162,6 +162,32 @@ impl Node for InfixExpression {
 
 impl Expression for InfixExpression {}
 
+pub struct PrefixExpression {
+    pub token: Token, // The prefix token, e.g. !
+    pub operator: String,
+    pub right: Box<dyn Expression>,
+}
+
+impl Node for PrefixExpression {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn string(&self) -> String {
+        let mut out = String::new();
+        out.push('(');
+        out.push_str(&self.operator);
+        out.push_str(&self.right.string());
+        out.push(')');
+        out
+    }
+}
+impl Expression for PrefixExpression {}
+
 pub struct IntegerLiteral {
     pub token: Token,
     pub value: i64,
@@ -181,6 +207,26 @@ impl Node for IntegerLiteral {
     }
 }
 impl Expression for IntegerLiteral {}
+
+pub struct Boolean {
+    pub token: Token,
+    pub value: bool,
+}
+
+impl Node for Boolean {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn string(&self) -> String {
+        self.token_type().to_string()
+    }
+}
+impl Expression for Boolean {}
 
 #[cfg(test)]
 mod tests {

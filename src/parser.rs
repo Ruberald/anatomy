@@ -78,6 +78,11 @@ impl Parser {
         // -------- prefix --------
         p.register_prefix(TokenType::IDENT, Parser::parse_identifier);
         p.register_prefix(TokenType::INT, Parser::parse_integer_literal);
+        p.register_prefix(TokenType::MINUS, Parser::parse_prefix_expression);
+        p.register_prefix(TokenType::BANG, Parser::parse_prefix_expression);
+        p.register_prefix(TokenType::TRUE, Parser::parse_boolean);
+        p.register_prefix(TokenType::FALSE, Parser::parse_boolean);
+        p.register_prefix(TokenType::LPAREN, Parser::parse_grouped_expression);
 
         // -------- infix --------
         p.register_infix(TokenType::PLUS, Parser::parse_infix_expression);
@@ -216,13 +221,51 @@ impl Parser {
         Some(Box::new(IntegerLiteral { token, value }))
     }
 
+    fn parse_boolean(&mut self) -> Option<Box<dyn Expression>> {
+        let token = self.cur_token.clone();
+        let value = match token.token_type {
+            TokenType::TRUE => true,
+            TokenType::FALSE => false,
+            _ => return None,
+        };
+
+        Some(Box::new(Boolean { token, value }))
+    }
+
+    fn parse_grouped_expression(&mut self) -> Option<Box<dyn Expression>> {
+        self.next_token();
+
+        let exp = self.parse_expression(Precedence::LOWEST)?;
+
+        if !self.expect_peek(TokenType::RPAREN) {
+            return None;
+        }
+
+        Some(exp)
+    }
+
+    fn parse_prefix_expression(&mut self) -> Option<Box<dyn Expression>> {
+        let token = self.cur_token.clone();
+        let operator = token.token_type.to_string();
+
+        self.next_token();
+
+        let right = self.parse_expression(Precedence::PREFIX)?;
+
+        Some(Box::new(PrefixExpression {
+            token,
+            operator,
+            right,
+        }))
+    }
+
     // =====================
     // INFIX PARSERS
     // =====================
 
     fn parse_infix_expression(&mut self, left: Box<dyn Expression>) -> Option<Box<dyn Expression>> {
         let token = self.cur_token.clone();
-        let operator = token.literal.clone().unwrap();
+        let operator = token.token_type.to_string();
         let precedence = self.cur_precedence();
 
         self.next_token();
@@ -431,5 +474,39 @@ mod tests {
 
         assert_eq!(ident.value, "foobar");
         assert_eq!(ident.token_type(), TokenType::IDENT);
+    }
+
+    #[test]
+    fn test_operator_precedence_parsing() {
+        let tests = vec![
+            ("-a * b", "((-a) * b)"),
+            ("!-a", "(!(-a))"),
+            ("a + b + c", "((a + b) + c)"),
+            ("a + b - c", "((a + b) - c)"),
+            ("a * b * c", "((a * b) * c)"),
+            ("a * b / c", "((a * b) / c)"),
+            ("a + b / c", "(a + (b / c))"),
+            ("a + b * c + d / e - f", "(((a + (b * c)) + (d / e)) - f)"),
+            ("3 + 4; -5 * 5", "(3 + 4)((-5) * 5)"),
+            ("true", "true"),
+            ("false", "false"),
+            ("3 > 5 == false", "((3 > 5) == false)"),
+            ("3 < 5 == true", "((3 < 5) == true)"),
+            ("1 + (2 + 3) + 4", "((1 + (2 + 3)) + 4)"),
+            ("(5 + 5) * 2", "((5 + 5) * 2)"),
+            ("2 / (5 + 5)", "(2 / (5 + 5))"),
+            ("-(5 + 5)", "(-(5 + 5))"),
+            ("!(true == true)", "(!(true == true))"),
+        ];
+
+        for (input, expected) in tests {
+            let lexer = Lexer::new(input.to_string());
+            let mut parser = Parser::new(lexer);
+            let program = parser.parse_program();
+            check_parser_errors(&parser);
+
+            let actual = program.string();
+            assert_eq!(actual, expected.to_string());
+        }
     }
 }
