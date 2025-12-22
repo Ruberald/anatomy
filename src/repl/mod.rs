@@ -116,19 +116,20 @@ impl REPL {
                     ReplMode::Normal => {
                         let mut lexer = Lexer::new(trim_buffer.to_string());
 
-                        // println!("Tokens:");
-                        // while let token = lexer.next_token() {
-                        //     if token.token_type == TokenType::EOF {
-                        //         break;
-                        //     }
-                        //     println!("{:?}", token);
-                        // }
-
                         println!("Parsed tree:");
                         let mut parser = crate::parser::Parser::new(lexer);
                         let program = parser.parse_program();
                         println!("{}", program.string());
                         check_parser_errors(&parser);
+
+                        // Compile program into VM bytecode and run it
+                        let bytes = crate::compiler::compile_program(&program);
+                        if !bytes.is_empty() {
+                            // Replace VM program with compiled bytes and run
+                            self.vm.load_program(bytes);
+                            self.vm.run();
+                            println!("Registers after run: {:#?}", self.vm.registers);
+                        }
                     }
                 },
             }

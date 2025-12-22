@@ -4,6 +4,7 @@ mod parser;
 
 mod instruction;
 mod vm;
+mod compiler;
 
 mod repl;
 

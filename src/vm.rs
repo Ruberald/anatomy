@@ -19,6 +19,14 @@ impl VM {
         }
     }
 
+    /// Replace the VM's program and reset the program counter.
+    pub fn load_program(&mut self, bytes: Vec<u8>) {
+        self.program = bytes;
+        self.pc = 0;
+        self.remainder = 0;
+        self.equal_flag = false;
+    }
+
     fn decode_opcode(&mut self) -> Opcode {
         let opcode = Opcode::from(self.program[self.pc]);
         self.pc += 1;
