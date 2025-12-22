@@ -1,8 +1,10 @@
 use std::io;
 use std::io::Write;
 
+use crate::ast::Node;
 use crate::lexer::Lexer;
 use crate::lexer::TokenType;
+use crate::parser::check_parser_errors;
 use crate::vm::VM;
 
 pub enum ReplMode {
@@ -114,13 +116,19 @@ impl REPL {
                     ReplMode::Normal => {
                         let mut lexer = Lexer::new(trim_buffer.to_string());
 
-                        println!("Tokens:");
-                        while let token = lexer.next_token() {
-                            if token.token_type == TokenType::EOF {
-                                break;
-                            }
-                            println!("{:?}", token);
-                        }
+                        // println!("Tokens:");
+                        // while let token = lexer.next_token() {
+                        //     if token.token_type == TokenType::EOF {
+                        //         break;
+                        //     }
+                        //     println!("{:?}", token);
+                        // }
+
+                        println!("Parsed tree:");
+                        let mut parser = crate::parser::Parser::new(lexer);
+                        let program = parser.parse_program();
+                        println!("{}", program.string());
+                        check_parser_errors(&parser);
                     }
                 },
             }

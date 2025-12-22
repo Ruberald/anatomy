@@ -76,7 +76,7 @@ impl Node for LetStatement {
 
     fn string(&self) -> String {
         let mut out = String::new();
-        out.push_str(&self.token.literal.clone().unwrap_or_default());
+        out.push_str(&self.token.token_type.to_string());
         out.push(' ');
         out.push_str(&self.name.string());
         out.push_str(" = ");
@@ -103,7 +103,7 @@ impl Node for ReturnStatement {
 
     fn string(&self) -> String {
         let mut out = String::new();
-        out.push_str(&self.token.literal.clone().unwrap_or_default());
+        out.push_str(&self.token.token_type.to_string());
         out.push(' ');
         out.push_str(&self.return_value.string());
         out.push(';');
@@ -125,9 +125,11 @@ impl Node for BlockStatement {
     }
     fn string(&self) -> String {
         let mut out = String::new();
+        out.push_str("{ ");
         for stmt in &self.statements {
             out.push_str(&stmt.string());
         }
+        out.push_str(" }");
         out
     }
 }
@@ -297,7 +299,7 @@ impl Node for FunctionLiteral {
 
     fn string(&self) -> String {
         let mut out = String::new();
-        out.push_str(&self.token.literal.clone().unwrap_or_default());
+        out.push_str(&self.token.token_type.to_string());
         out.push('(');
         let params: Vec<String> = self.parameters.iter().map(|p| p.string()).collect();
         out.push_str(&params.join(", "));

@@ -488,22 +488,22 @@ fn token_precedence(token: &TokenType) -> Precedence {
     }
 }
 
+pub fn check_parser_errors(parser: &Parser) {
+    let errors = parser.errors();
+    assert!(
+        errors.0.is_empty(),
+        "Parser has {} errors:\n{}",
+        errors.0.len(),
+        errors
+    );
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     // -------------------------------
     // parse_program() TESTS
     // -------------------------------
-
-    fn check_parser_errors(parser: &Parser) {
-        let errors = parser.errors();
-        assert!(
-            errors.0.is_empty(),
-            "Parser has {} errors:\n{}",
-            errors.0.len(),
-            errors
-        );
-    }
 
     #[test]
     fn test_let_statements() {
