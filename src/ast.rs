@@ -111,6 +111,27 @@ impl Node for ReturnStatement {
     }
 }
 
+pub struct BlockStatement {
+    pub token: Token, // the { token
+    pub statements: Vec<Box<dyn Statement>>,
+}
+impl Statement for BlockStatement {}
+impl Node for BlockStatement {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+    fn string(&self) -> String {
+        let mut out = String::new();
+        for stmt in &self.statements {
+            out.push_str(&stmt.string());
+        }
+        out
+    }
+}
+
 pub struct ExpressionStatement {
     pub token: Token, // the first token of the expression
     pub expression: Box<dyn Expression>,
@@ -227,6 +248,92 @@ impl Node for Boolean {
     }
 }
 impl Expression for Boolean {}
+
+pub struct IfExpression {
+    pub token: Token, // The 'if' token
+    pub condition: Box<dyn Expression>,
+    pub consequence: BlockStatement,
+    pub alternative: Option<BlockStatement>,
+}
+
+impl Node for IfExpression {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn string(&self) -> String {
+        let mut out = String::new();
+        out.push_str("if");
+        out.push_str(&self.condition.string());
+        out.push(' ');
+        out.push_str(&self.consequence.string());
+        if let Some(alt) = &self.alternative {
+            out.push_str("else ");
+            out.push_str(&alt.string());
+        }
+        out
+    }
+}
+impl Expression for IfExpression {}
+
+pub struct FunctionLiteral {
+    pub token: Token, // The 'fn' token
+    pub parameters: Vec<Identifier>,
+    pub body: BlockStatement,
+}
+
+impl Node for FunctionLiteral {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn string(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&self.token.literal.clone().unwrap_or_default());
+        out.push('(');
+        let params: Vec<String> = self.parameters.iter().map(|p| p.string()).collect();
+        out.push_str(&params.join(", "));
+        out.push(')');
+        out.push_str(&self.body.string());
+        out
+    }
+}
+impl Expression for FunctionLiteral {}
+
+pub struct CallExpression {
+    pub token: Token,                  // The '(' token
+    pub function: Box<dyn Expression>, // Identifier or FunctionLiteral
+    pub arguments: Vec<Box<dyn Expression>>,
+}
+
+impl Node for CallExpression {
+    fn token_type(&self) -> TokenType {
+        self.token.token_type.clone()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn string(&self) -> String {
+        let mut out = String::new();
+        out.push_str(&self.function.string());
+        out.push('(');
+        let args: Vec<String> = self.arguments.iter().map(|a| a.string()).collect();
+        out.push_str(&args.join(", "));
+        out.push(')');
+        out
+    }
+}
+impl Expression for CallExpression {}
 
 #[cfg(test)]
 mod tests {
