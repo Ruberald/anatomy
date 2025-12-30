@@ -126,14 +126,13 @@ impl REPL {
                         check_parser_errors(&parser);
 
                         // Compile program into VM bytecode and run it
-                        let (bytes, pool) = crate::compiler::compile_program(&program);
-                        if !bytes.is_empty() {
-                            // Replace VM program with compiled bytes and run
-                            self.vm.program = bytes;
-                            self.vm.constant_pool = pool;
-                            self.vm.run();
-                            println!("Registers after run: {:#?}", self.vm.frames[0].registers);
-                        }
+                        let (bytes, pool) = self.compiler.compile_statements(&program);
+                        // Replace VM program with compiled bytes and run
+                        self.vm.program = bytes;
+                        self.vm.constant_pool = pool;
+                        self.vm.frames.last_mut().unwrap().pc = 0;
+                        self.vm.run();
+                        println!("Registers after run: {:#?}", self.vm.frames[0].registers);
                     }
                 },
             }

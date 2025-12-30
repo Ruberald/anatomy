@@ -33,6 +33,7 @@ impl Compiler {
         println!("next_register: {}", self.next_register);
         println!("symbols: {:?}", self.symbols);
         println!("bytes: {:?}", self.program);
+        println!("constant_pool: {:?}", self.constant_pool);
 
         (self.program.clone(), self.constant_pool.clone())
     }
