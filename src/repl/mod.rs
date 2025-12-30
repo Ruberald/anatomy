@@ -51,7 +51,7 @@ impl REPL {
         println!("Anatomy REPL {VERSION}");
 
         // Use rustyline for GNU Readline-like features (line editing, history)
-    let mut rl = DefaultEditor::new().expect("Failed to create rustyline Editor");
+        let mut rl = DefaultEditor::new().expect("Failed to create rustyline Editor");
         let hist_path = ".anatomy_history";
         let _ = rl.load_history(hist_path);
 
@@ -137,7 +137,10 @@ impl REPL {
                                 self.vm.frames.last_mut().unwrap().pc = 0;
                                 self.vm.run();
 
-                                log::debug!("Registers after run: {:#?}", self.vm.frames[0].registers);
+                                log::debug!(
+                                    "Registers after run: {:#?}",
+                                    self.vm.frames[0].registers
+                                );
 
                                 if let Some(r) = last_expr_reg {
                                     println!("=> {}", self.vm.frames[0].registers[r as usize]);

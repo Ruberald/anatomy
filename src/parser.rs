@@ -93,7 +93,7 @@ impl Parser {
         p.register_infix(TokenType::SLASH, Parser::parse_infix_expression);
         p.register_infix(TokenType::EQ, Parser::parse_infix_expression);
         p.register_infix(TokenType::NOT_EQ, Parser::parse_infix_expression);
-    p.register_infix(TokenType::ASSIGN, Parser::parse_infix_expression);
+        p.register_infix(TokenType::ASSIGN, Parser::parse_infix_expression);
         p.register_infix(TokenType::LT, Parser::parse_infix_expression);
         p.register_infix(TokenType::GT, Parser::parse_infix_expression);
         p.register_infix(TokenType::LPAREN, Parser::parse_call_expression);
@@ -193,7 +193,8 @@ impl Parser {
         let mut left = prefix(self)?;
 
         while self.peek_token.token_type != TokenType::SEMICOLON
-            && (precedence < self.peek_precedence() || self.peek_token.token_type == TokenType::ASSIGN)
+            && (precedence < self.peek_precedence()
+                || self.peek_token.token_type == TokenType::ASSIGN)
         {
             let infix = match self.infix_parse_fns.get(&self.peek_token.token_type) {
                 Some(f) => *f,
@@ -593,12 +594,27 @@ mod tests {
 
         assert_eq!(program.statements.len(), 1);
         let stmt = &program.statements[0];
-        let expr_stmt = stmt.as_any().downcast_ref::<crate::ast::ExpressionStatement>().expect("Expected ExpressionStatement");
-        let infix = expr_stmt.expression.as_any().downcast_ref::<crate::ast::InfixExpression>().expect("Expected InfixExpression");
+        let expr_stmt = stmt
+            .as_any()
+            .downcast_ref::<crate::ast::ExpressionStatement>()
+            .expect("Expected ExpressionStatement");
+        let infix = expr_stmt
+            .expression
+            .as_any()
+            .downcast_ref::<crate::ast::InfixExpression>()
+            .expect("Expected InfixExpression");
         assert_eq!(infix.operator, "=");
-        let left_ident = infix.left.as_any().downcast_ref::<crate::ast::Identifier>().expect("Expected Identifier on left");
+        let left_ident = infix
+            .left
+            .as_any()
+            .downcast_ref::<crate::ast::Identifier>()
+            .expect("Expected Identifier on left");
         assert_eq!(left_ident.value, "x");
-        let right_int = infix.right.as_any().downcast_ref::<crate::ast::IntegerLiteral>().expect("Expected IntegerLiteral on right");
+        let right_int = infix
+            .right
+            .as_any()
+            .downcast_ref::<crate::ast::IntegerLiteral>()
+            .expect("Expected IntegerLiteral on right");
         assert_eq!(right_int.value, 5);
     }
 
@@ -947,5 +963,98 @@ mod tests {
             let actual = program.string();
             assert_eq!(actual, expected.to_string());
         }
+    }
+
+    #[test]
+    fn test_parse_chained_assignment_expression() {
+        let input = "a = b = 5;";
+
+        let lexer = Lexer::new(input.to_string());
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        assert_eq!(program.statements.len(), 1);
+        let stmt = &program.statements[0];
+        let expr_stmt = stmt
+            .as_any()
+            .downcast_ref::<crate::ast::ExpressionStatement>()
+            .expect("Expected ExpressionStatement");
+        let infix = expr_stmt
+            .expression
+            .as_any()
+            .downcast_ref::<crate::ast::InfixExpression>()
+            .expect("Expected InfixExpression");
+        // top-level operator should be '='
+        assert_eq!(infix.operator, "=");
+        let left_ident = infix
+            .left
+            .as_any()
+            .downcast_ref::<crate::ast::Identifier>()
+            .expect("Expected Identifier on left");
+        assert_eq!(left_ident.value, "a");
+
+        // right side should itself be an assignment b = 5
+        let right_infix = infix
+            .right
+            .as_any()
+            .downcast_ref::<crate::ast::InfixExpression>()
+            .expect("Expected nested InfixExpression");
+        assert_eq!(right_infix.operator, "=");
+        let right_left = right_infix
+            .left
+            .as_any()
+            .downcast_ref::<crate::ast::Identifier>()
+            .expect("Expected Identifier on nested left");
+        assert_eq!(right_left.value, "b");
+        let right_right = right_infix
+            .right
+            .as_any()
+            .downcast_ref::<crate::ast::IntegerLiteral>()
+            .expect("Expected IntegerLiteral on nested right");
+        assert_eq!(right_right.value, 5);
+    }
+
+    #[test]
+    fn test_parse_assignment_applies_after_arithmetic() {
+        let input = "a + b = c;";
+
+        let lexer = Lexer::new(input.to_string());
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        assert_eq!(program.statements.len(), 1);
+        let stmt = &program.statements[0];
+        let expr_stmt = stmt
+            .as_any()
+            .downcast_ref::<crate::ast::ExpressionStatement>()
+            .expect("Expected ExpressionStatement");
+        let infix = expr_stmt
+            .expression
+            .as_any()
+            .downcast_ref::<crate::ast::InfixExpression>()
+            .expect("Expected InfixExpression");
+        // The parser treats assignment as binding to the right-hand side here,
+        // so the top-level operator will be '+' and the RHS will be the assignment.
+        assert_eq!(infix.operator, "+");
+        let right_assign = infix
+            .right
+            .as_any()
+            .downcast_ref::<crate::ast::InfixExpression>()
+            .expect("Expected nested InfixExpression on right");
+        assert_eq!(right_assign.operator, "=");
+        let right_left = right_assign
+            .left
+            .as_any()
+            .downcast_ref::<crate::ast::Identifier>()
+            .expect("Expected Identifier on nested left");
+        assert_eq!(right_left.value, "b");
+        let right_right = right_assign
+            .right
+            .as_any()
+            .downcast_ref::<crate::ast::Identifier>()
+            .expect("Expected Identifier on nested right");
+        assert_eq!(right_right.value, "c");
     }
 }

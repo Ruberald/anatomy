@@ -2,9 +2,9 @@ mod ast;
 mod lexer;
 mod parser;
 
+mod compiler;
 mod instruction;
 mod vm;
-mod compiler;
 
 mod repl;
 

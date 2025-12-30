@@ -32,12 +32,16 @@ impl Compiler {
         // Ensure program halts when done
         self.program.push(Opcode::HLT as u8);
 
-    log::debug!("next_register: {}", self.next_register);
-    log::debug!("symbols: {:?}", self.symbols);
-    log::debug!("bytes: {:?}", self.program);
-    log::debug!("constant_pool: {:?}", self.constant_pool);
+        log::debug!("next_register: {}", self.next_register);
+        log::debug!("symbols: {:?}", self.symbols);
+        log::debug!("bytes: {:?}", self.program);
+        log::debug!("constant_pool: {:?}", self.constant_pool);
 
-        (self.program.clone(), self.constant_pool.clone(), last_expr_reg)
+        (
+            self.program.clone(),
+            self.constant_pool.clone(),
+            last_expr_reg,
+        )
     }
 
     /// Entry point: compile a Program into raw bytes for the VM.
@@ -91,7 +95,9 @@ impl Compiler {
             // Do not overwrite an existing symbol mapping; keep the first
             // binding encountered for a given name so later conditional
             // branches don't clobber earlier runtime-visible bindings.
-            self.symbols.entry(let_stmt.name.value.clone()).or_insert(reg);
+            self.symbols
+                .entry(let_stmt.name.value.clone())
+                .or_insert(reg);
             return None;
         }
 
@@ -258,7 +264,9 @@ impl Compiler {
                 }
                 "=" => {
                     // Assignment: compile RHS into the LHS symbol's register.
-                    if let Some(ident) = infix.left.as_any().downcast_ref::<crate::ast::Identifier>() {
+                    if let Some(ident) =
+                        infix.left.as_any().downcast_ref::<crate::ast::Identifier>()
+                    {
                         let name = ident.value.clone();
                         if let Some(&reg) = self.symbols.get(&name) {
                             let _ = self.compile_expression_dest(&infix.right, Some(reg));
@@ -391,7 +399,13 @@ impl Compiler {
             // Compile consequence. If the condition is a compile-time `true`,
             // commit symbol changes from the consequence; otherwise isolate them.
             let consequence_commit = matches!(const_condition, Some(true));
-            if let Some(_) = if_expr.consequence.statements.iter().enumerate().next_back() {
+            if let Some(_) = if_expr
+                .consequence
+                .statements
+                .iter()
+                .enumerate()
+                .next_back()
+            {
                 self.compile_block(&if_expr.consequence, consequence_commit, dest);
             }
 
@@ -447,7 +461,8 @@ impl Compiler {
             if count > 0 {
                 for (i, stmt) in block.statements.iter().enumerate() {
                     if i + 1 == count {
-                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>() {
+                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>()
+                        {
                             let _ = self.compile_expression_dest(&expr_stmt.expression, Some(dest));
                             continue;
                         }
@@ -463,7 +478,8 @@ impl Compiler {
             if count > 0 {
                 for (i, stmt) in block.statements.iter().enumerate() {
                     if i + 1 == count {
-                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>() {
+                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>()
+                        {
                             let _ = self.compile_expression_dest(&expr_stmt.expression, Some(dest));
                             continue;
                         }
@@ -996,6 +1012,63 @@ mod tests {
 
         let (_bytes, pool) = compile_program(&program);
         assert_eq!(pool, vec![0]);
+    }
+
+    #[test]
+    fn test_assignment_to_non_identifier_does_not_crash() {
+        // (1 + 2) = 5; -> left is a composite expression; compiler should
+        // compile the RHS and not panic. We don't assert specific bytes,
+        // just ensure compile_program returns without panicking and produces
+        // a non-empty program and a constant pool that contains 5.
+        let infix_left = InfixExpression {
+            token: Token {
+                token_type: TokenType::LPAREN,
+                literal: Some("(".to_string()),
+            },
+            left: Box::new(IntegerLiteral {
+                token: Token {
+                    token_type: TokenType::INT,
+                    literal: Some("1".to_string()),
+                },
+                value: 1,
+            }),
+            operator: "+".to_string(),
+            right: Box::new(IntegerLiteral {
+                token: Token {
+                    token_type: TokenType::INT,
+                    literal: Some("2".to_string()),
+                },
+                value: 2,
+            }),
+        };
+
+        let program = Program {
+            statements: vec![Box::new(ExpressionStatement {
+                token: Token {
+                    token_type: TokenType::EQ,
+                    literal: Some("=".to_string()),
+                },
+                expression: Box::new(InfixExpression {
+                    token: Token {
+                        token_type: TokenType::EQ,
+                        literal: Some("=".to_string()),
+                    },
+                    left: Box::new(infix_left),
+                    operator: "=".to_string(),
+                    right: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("5".to_string()),
+                        },
+                        value: 5,
+                    }),
+                }),
+            })],
+        };
+
+        let (bytes, pool) = compile_program(&program);
+        assert!(!bytes.is_empty(), "compiled bytes should not be empty");
+        assert!(pool.contains(&5), "constant pool should contain 5");
     }
 
     #[test]
