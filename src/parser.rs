@@ -93,6 +93,7 @@ impl Parser {
         p.register_infix(TokenType::SLASH, Parser::parse_infix_expression);
         p.register_infix(TokenType::EQ, Parser::parse_infix_expression);
         p.register_infix(TokenType::NOT_EQ, Parser::parse_infix_expression);
+    p.register_infix(TokenType::ASSIGN, Parser::parse_infix_expression);
         p.register_infix(TokenType::LT, Parser::parse_infix_expression);
         p.register_infix(TokenType::GT, Parser::parse_infix_expression);
         p.register_infix(TokenType::LPAREN, Parser::parse_call_expression);
@@ -192,7 +193,7 @@ impl Parser {
         let mut left = prefix(self)?;
 
         while self.peek_token.token_type != TokenType::SEMICOLON
-            && precedence < self.peek_precedence()
+            && (precedence < self.peek_precedence() || self.peek_token.token_type == TokenType::ASSIGN)
         {
             let infix = match self.infix_parse_fns.get(&self.peek_token.token_type) {
                 Some(f) => *f,
@@ -579,6 +580,26 @@ mod tests {
         for (stmt, expected_value) in program.statements.iter().zip(expected_return_values.iter()) {
             test_return_statement(&**stmt, *expected_value);
         }
+    }
+
+    #[test]
+    fn test_parse_assignment_expression() {
+        let input = "x = 5;";
+
+        let lexer = Lexer::new(input.to_string());
+        let mut parser = Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        assert_eq!(program.statements.len(), 1);
+        let stmt = &program.statements[0];
+        let expr_stmt = stmt.as_any().downcast_ref::<crate::ast::ExpressionStatement>().expect("Expected ExpressionStatement");
+        let infix = expr_stmt.expression.as_any().downcast_ref::<crate::ast::InfixExpression>().expect("Expected InfixExpression");
+        assert_eq!(infix.operator, "=");
+        let left_ident = infix.left.as_any().downcast_ref::<crate::ast::Identifier>().expect("Expected Identifier on left");
+        assert_eq!(left_ident.value, "x");
+        let right_int = infix.right.as_any().downcast_ref::<crate::ast::IntegerLiteral>().expect("Expected IntegerLiteral on right");
+        assert_eq!(right_int.value, 5);
     }
 
     fn test_return_statement(stmt: &dyn Statement, expected_value: i32) {

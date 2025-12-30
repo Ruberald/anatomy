@@ -72,13 +72,13 @@ impl VM {
                 let register = self.next_8_bits() as usize;
                 let index = self.next_16_bits() as usize;
                 let number = self.constant_pool[index];
-                println!("Loading {number} into register {register}");
+                log::debug!("Loading {number} into register {register}");
                 let frame = self.frames.last_mut().unwrap();
                 frame.registers[register] = number;
             }
 
             Opcode::HLT => {
-                println!("HLT encountered");
+                log::debug!("HLT encountered");
                 return true;
             }
 
@@ -142,7 +142,7 @@ impl VM {
                 let op1 = frame.registers[r1];
                 let op2 = frame.registers[r2];
 
-                println!("{op1} == {op2}");
+                log::debug!("{op1} == {op2}");
 
                 self.equal_flag = op1 == op2;
             }

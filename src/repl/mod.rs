@@ -1,5 +1,5 @@
-use std::io;
-use std::io::Write;
+use rustyline::error::ReadlineError;
+use rustyline::DefaultEditor;
 
 use crate::ast::Node;
 use crate::compiler::Compiler;
@@ -50,93 +50,120 @@ impl REPL {
         const VERSION: &str = env!("CARGO_PKG_VERSION");
         println!("Anatomy REPL {VERSION}");
 
-        let mut buffer = String::new();
+        // Use rustyline for GNU Readline-like features (line editing, history)
+    let mut rl = DefaultEditor::new().expect("Failed to create rustyline Editor");
+        let hist_path = ".anatomy_history";
+        let _ = rl.load_history(hist_path);
 
         loop {
-            let stdin = io::stdin();
+            let readline = rl.readline("~> ");
+            match readline {
+                Ok(line) => {
+                    let trim_buffer = line.trim();
+                    // record history and command buffer
+                    if !trim_buffer.is_empty() {
+                        let _ = rl.add_history_entry(trim_buffer);
+                    }
+                    self.command_buffer.push(trim_buffer.to_string());
 
-            print!("~> ");
-            io::stdout().flush().expect("Unable to flush stdout.");
+                    match trim_buffer {
+                        ".quit" => {
+                            println!("Exiting.");
+                            let _ = rl.save_history(hist_path);
+                            std::process::exit(0);
+                        }
 
-            stdin
-                .read_line(&mut buffer)
-                .expect("Unable to read line from repl.");
+                        ".hex" => {
+                            self.mode = ReplMode::Hex;
+                            println!("Switched to HEX mode. Raw byte input enabled.");
+                        }
 
-            self.command_buffer.push(buffer.to_string());
+                        ".normal" => {
+                            self.mode = ReplMode::Normal;
+                            println!("Switched to NORMAL mode.");
+                        }
 
-            let trim_buffer = buffer.trim();
-            match trim_buffer {
-                ".quit" => {
+                        ".history" => {
+                            for command in &self.command_buffer {
+                                println!("{}", command);
+                            }
+                        }
+
+                        ".program" => {
+                            println!("Listing instructions currently in VM's program vector:");
+                            for instruction in &self.vm.program {
+                                println!("{}", instruction);
+                            }
+                            println!("End of Program Listing");
+                        }
+
+                        ".registers" => {
+                            println!("Listing registers and all contents:");
+                            println!("{:#?}", self.vm.frames[0].registers);
+                            println!("End of Register Listing")
+                        }
+
+                        _ => match self.mode {
+                            ReplMode::Hex => {
+                                let results = self.parse_hex(trim_buffer);
+                                match results {
+                                    Ok(mut bytes) => {
+                                        self.vm.program.append(&mut bytes);
+                                    }
+                                    Err(_) => {
+                                        println!(
+                                            "Invalid hex input. Expected space-separated bytes like: 01 ef a3 10"
+                                        );
+                                    }
+                                }
+                                self.vm.run_once();
+                            }
+
+                            ReplMode::Normal => {
+                                let mut lexer = Lexer::new(trim_buffer.to_string());
+
+                                log::debug!("Parsed tree:");
+                                let mut parser = crate::parser::Parser::new(lexer);
+                                let program = parser.parse_program();
+                                log::debug!("{}", program.string());
+                                check_parser_errors(&parser);
+
+                                // Compile program into VM bytecode and run it
+                                let (bytes, pool, last_expr_reg) =
+                                    self.compiler.compile_statements(&program);
+                                // Replace VM program with compiled bytes and run
+                                self.vm.program = bytes;
+                                self.vm.constant_pool = pool;
+                                self.vm.frames.last_mut().unwrap().pc = 0;
+                                self.vm.run();
+
+                                log::debug!("Registers after run: {:#?}", self.vm.frames[0].registers);
+
+                                if let Some(r) = last_expr_reg {
+                                    println!("=> {}", self.vm.frames[0].registers[r as usize]);
+                                } else {
+                                    // italics: no value to print (e.g., statement)
+                                    println!("\x1b[3m=> no value\x1b[0m");
+                                }
+                            }
+                        },
+                    }
+                }
+                Err(ReadlineError::Interrupted) => {
+                    // User pressed Ctrl-C — ignore and continue
+                    continue;
+                }
+                Err(ReadlineError::Eof) => {
+                    // Ctrl-D / EOF — save history and exit
+                    let _ = rl.save_history(hist_path);
                     println!("Exiting.");
                     std::process::exit(0);
                 }
-
-                ".hex" => {
-                    self.mode = ReplMode::Hex;
-                    println!("Switched to HEX mode. Raw byte input enabled.");
+                Err(err) => {
+                    println!("Error reading line: {err}");
+                    break;
                 }
-
-                ".normal" => {
-                    self.mode = ReplMode::Normal;
-                    println!("Switched to NORMAL mode.");
-                }
-
-                ".history" => {
-                    for command in &self.command_buffer {
-                        println!("{}", command);
-                    }
-                }
-
-                ".program" => {
-                    println!("Listing instructions currently in VM's program vector:");
-                    for instruction in &self.vm.program {
-                        println!("{}", instruction);
-                    }
-                    println!("End of Program Listing");
-                }
-
-                ".registers" => {
-                    println!("Listing registers and all contents:");
-                    println!("{:#?}", self.vm.frames[0].registers);
-                    println!("End of Register Listing")
-                }
-
-                _ => match self.mode {
-                    ReplMode::Hex => {
-                        let results = self.parse_hex(trim_buffer);
-                        match results {
-                            Ok(mut bytes) => {
-                                self.vm.program.append(&mut bytes);
-                            }
-                            Err(_) => {
-                                println!("Invalid hex input. Expected space-separated bytes like: 01 ef a3 10");
-                            }
-                        }
-                        self.vm.run_once();
-                    }
-
-                    ReplMode::Normal => {
-                        let mut lexer = Lexer::new(trim_buffer.to_string());
-
-                        println!("Parsed tree:");
-                        let mut parser = crate::parser::Parser::new(lexer);
-                        let program = parser.parse_program();
-                        println!("{}", program.string());
-                        check_parser_errors(&parser);
-
-                        // Compile program into VM bytecode and run it
-                        let (bytes, pool) = self.compiler.compile_statements(&program);
-                        // Replace VM program with compiled bytes and run
-                        self.vm.program = bytes;
-                        self.vm.constant_pool = pool;
-                        self.vm.frames.last_mut().unwrap().pc = 0;
-                        self.vm.run();
-                        println!("Registers after run: {:#?}", self.vm.frames[0].registers);
-                    }
-                },
             }
-
-            buffer.clear();
         }
     }
 }
@@ -313,7 +340,7 @@ mod tests {
         let program = parser.parse_program();
         check_parser_errors(&parser);
 
-        let (bytes, pool) = repl.compiler.compile_statements(&program);
+        let (bytes, pool, _) = repl.compiler.compile_statements(&program);
         repl.vm.program = bytes;
         repl.vm.constant_pool = pool;
 
@@ -374,7 +401,7 @@ mod tests {
         let program = parser.parse_program();
         check_parser_errors(&parser);
 
-        let (bytes, pool) = repl.compiler.compile_statements(&program);
+        let (bytes, pool, _) = repl.compiler.compile_statements(&program);
         repl.vm.program = bytes;
         repl.vm.constant_pool = pool;
 

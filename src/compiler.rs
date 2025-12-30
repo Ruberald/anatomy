@@ -18,22 +18,26 @@ impl Compiler {
             constant_pool: vec![],
         }
     }
-    pub fn compile_statements(&mut self, program: &Program) -> (Vec<u8>, Vec<i64>) {
+    pub fn compile_statements(&mut self, program: &Program) -> (Vec<u8>, Vec<i64>, Option<u8>) {
         self.program.clear();
 
+        let mut last_expr_reg: Option<u8> = None;
         for stmt in &program.statements {
-            self.compile_statement(stmt);
+            let maybe = self.compile_statement(stmt);
+            if let Some(r) = maybe {
+                last_expr_reg = Some(r);
+            }
         }
 
         // Ensure program halts when done
         self.program.push(Opcode::HLT as u8);
 
-        println!("next_register: {}", self.next_register);
-        println!("symbols: {:?}", self.symbols);
-        println!("bytes: {:?}", self.program);
-        println!("constant_pool: {:?}", self.constant_pool);
+    log::debug!("next_register: {}", self.next_register);
+    log::debug!("symbols: {:?}", self.symbols);
+    log::debug!("bytes: {:?}", self.program);
+    log::debug!("constant_pool: {:?}", self.constant_pool);
 
-        (self.program.clone(), self.constant_pool.clone())
+        (self.program.clone(), self.constant_pool.clone(), last_expr_reg)
     }
 
     /// Entry point: compile a Program into raw bytes for the VM.
@@ -54,12 +58,31 @@ impl Compiler {
         r
     }
 
+    /// Intern a constant value into the constant pool and return its index.
+    /// This deduplicates constants so the same value isn't stored multiple times.
+    fn intern_constant(&mut self, val: i64) -> u16 {
+        // simple linear search for now (constant pool is small); return existing index if found
+        for (i, v) in self.constant_pool.iter().enumerate() {
+            if *v == val {
+                return i as u16;
+            }
+        }
+        self.constant_pool.push(val);
+        (self.constant_pool.len() - 1) as u16
+    }
+
+    /// Reserve a slot in the constant pool for backpatching and return its index.
+    fn reserve_constant(&mut self) -> usize {
+        self.constant_pool.push(0);
+        self.constant_pool.len() - 1
+    }
+
     /// Return the register index for a named symbol, if present.
     pub fn get_symbol(&self, name: &str) -> Option<u8> {
         self.symbols.get(name).copied()
     }
 
-    fn compile_statement(&mut self, stmt: &Box<dyn Statement>) {
+    fn compile_statement(&mut self, stmt: &Box<dyn Statement>) -> Option<u8> {
         // Downcast to concrete statements we support
         if let Some(let_stmt) = stmt.as_any().downcast_ref::<LetStatement>() {
             // Allocate a register for the `let` binding and compile the value into it.
@@ -69,24 +92,25 @@ impl Compiler {
             // binding encountered for a given name so later conditional
             // branches don't clobber earlier runtime-visible bindings.
             self.symbols.entry(let_stmt.name.value.clone()).or_insert(reg);
-            return;
+            return None;
         }
 
         if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>() {
-            // compile expression and leave result in a register (no-op beyond that)
-            let _ = self.compile_expression(&expr_stmt.expression);
-            return;
+            // compile expression and return the register holding the result
+            let reg = self.compile_expression(&expr_stmt.expression);
+            return Some(reg);
         }
 
         if let Some(_ret) = stmt.as_any().downcast_ref::<ReturnStatement>() {
             // No call/return support in the current VM; ignore or HLT
             self.program.push(Opcode::HLT as u8);
-            return;
+            return None;
         }
 
         if let Some(_block) = stmt.as_any().downcast_ref::<BlockStatement>() {
             // Not implemented yet; no-op
         }
+        None
     }
 
     /// Compile an expression and return the register index holding the result.
@@ -104,10 +128,9 @@ impl Compiler {
                 self.alloc_register()
             };
             // LOAD reg constant_pool_index
-            self.constant_pool.push(int_lit.value);
+            let index = self.intern_constant(int_lit.value);
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
-            let index = (self.constant_pool.len() - 1) as u16;
             self.program.push(((index >> 8) & 0xFF) as u8);
             self.program.push((index & 0xFF) as u8);
             return reg;
@@ -120,10 +143,9 @@ impl Compiler {
                 self.alloc_register()
             };
             let imm: u16 = if bool_lit.value { 1 } else { 0 };
-            self.constant_pool.push(imm as i64);
+            let index = self.intern_constant(imm as i64);
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
-            let index = (self.constant_pool.len() - 1) as u16;
             self.program.push(((index >> 8) & 0xFF) as u8);
             self.program.push((index & 0xFF) as u8);
             return reg;
@@ -142,10 +164,11 @@ impl Compiler {
             } else {
                 self.alloc_register()
             };
+            let zero_idx = self.intern_constant(0);
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
-            self.program.push(0);
-            self.program.push(0);
+            self.program.push(((zero_idx >> 8) & 0xFF) as u8);
+            self.program.push((zero_idx & 0xFF) as u8);
             return reg;
         }
 
@@ -158,10 +181,11 @@ impl Compiler {
                 } else {
                     self.alloc_register()
                 };
+                let zero_idx = self.intern_constant(0);
                 self.program.push(Opcode::LOAD as u8);
                 self.program.push(zero_reg);
-                self.program.push(0);
-                self.program.push(0);
+                self.program.push(((zero_idx >> 8) & 0xFF) as u8);
+                self.program.push((zero_idx & 0xFF) as u8);
 
                 let dest = if let Some(d) = into {
                     d
@@ -205,32 +229,51 @@ impl Compiler {
 
             match infix.operator.as_str() {
                 "+" => {
-                    println!("COMPILE INFIX '+' left={} right={}", left, right);
+                    log::debug!("COMPILE INFIX '+' left={} right={}", left, right);
                     self.program.push(Opcode::ADD as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "-" => {
-                    println!("COMPILE INFIX '-' left={} right={}", left, right);
+                    log::debug!("COMPILE INFIX '-' left={} right={}", left, right);
                     self.program.push(Opcode::SUB as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "*" => {
-                    println!("COMPILE INFIX '*' left={} right={}", left, right);
+                    log::debug!("COMPILE INFIX '*' left={} right={}", left, right);
                     self.program.push(Opcode::MUL as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "/" => {
-                    println!("COMPILE INFIX '/' left={} right={}", left, right);
+                    log::debug!("COMPILE INFIX '/' left={} right={}", left, right);
                     self.program.push(Opcode::DIV as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
+                }
+                "=" => {
+                    // Assignment: compile RHS into the LHS symbol's register.
+                    if let Some(ident) = infix.left.as_any().downcast_ref::<crate::ast::Identifier>() {
+                        let name = ident.value.clone();
+                        if let Some(&reg) = self.symbols.get(&name) {
+                            let _ = self.compile_expression_dest(&infix.right, Some(reg));
+                            return reg;
+                        } else {
+                            // If symbol didn't exist, create it (like a top-level let)
+                            let reg = self.alloc_register();
+                            let _ = self.compile_expression_dest(&infix.right, Some(reg));
+                            self.symbols.insert(name, reg);
+                            return reg;
+                        }
+                    }
+                    // fallback: compile right and return its register
+                    let r = self.compile_expression_dest(&infix.right, None);
+                    return r;
                 }
                 "==" | "!=" | ">" | "<" | ">=" | "<=" => {
                     let opcode = match infix.operator.as_str() {
@@ -276,8 +319,7 @@ impl Compiler {
                 let _ = self.compile_expression_dest(&if_expr.condition, None);
 
                 // reserve placeholder for alternative target and record its index
-                self.constant_pool.push(0);
-                alt_const_idx = self.constant_pool.len() - 1;
+                alt_const_idx = self.reserve_constant();
 
                 let alt_reg = self.alloc_register();
                 self.program.push(Opcode::LOAD as u8);
@@ -296,8 +338,7 @@ impl Compiler {
                 let cond_reg = self.compile_expression_dest(&if_expr.condition, None);
 
                 // load zero constant into a register for comparison
-                self.constant_pool.push(0);
-                let zero_idx = (self.constant_pool.len() - 1) as u16;
+                let zero_idx = self.intern_constant(0) as u16;
                 let zero_reg = self.alloc_register();
                 self.program.push(Opcode::LOAD as u8);
                 self.program.push(zero_reg);
@@ -311,8 +352,7 @@ impl Compiler {
                 self.program.push(0); // padding
 
                 // prepare placeholder for jump-to-alternative
-                self.constant_pool.push(0);
-                alt_const_idx = self.constant_pool.len() - 1; // usize
+                alt_const_idx = self.reserve_constant(); // usize
                 let alt_reg = self.alloc_register();
                 self.program.push(Opcode::LOAD as u8);
                 self.program.push(alt_reg);
@@ -357,8 +397,7 @@ impl Compiler {
 
             if let Some(alt_block) = &if_expr.alternative {
                 // need to jump over the alternative after consequence
-                self.constant_pool.push(0);
-                let after_const_idx = self.constant_pool.len() - 1;
+                let after_const_idx = self.reserve_constant();
                 let after_reg = self.alloc_register();
                 self.program.push(Opcode::LOAD as u8);
                 self.program.push(after_reg);
@@ -396,8 +435,9 @@ impl Compiler {
         let reg = self.alloc_register();
         self.program.push(Opcode::LOAD as u8);
         self.program.push(reg);
-        self.program.push(0);
-        self.program.push(0);
+        let zero_idx = self.intern_constant(0);
+        self.program.push(((zero_idx >> 8) & 0xFF) as u8);
+        self.program.push((zero_idx & 0xFF) as u8);
         reg
     }
 
@@ -879,5 +919,101 @@ mod tests {
                 || bytes.contains(&(Opcode::JNEQ as u8))
                 || bytes.contains(&(Opcode::JMPF as u8))
         );
+    }
+
+    #[test]
+    fn test_constant_pool_deduplicates_integer_literals() {
+        // two top-level integer literals should produce a single constant pool entry
+        let program = Program {
+            statements: vec![
+                Box::new(ExpressionStatement {
+                    token: Token {
+                        token_type: TokenType::INT,
+                        literal: Some("1".to_string()),
+                    },
+                    expression: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("1".to_string()),
+                        },
+                        value: 1,
+                    }),
+                }),
+                Box::new(ExpressionStatement {
+                    token: Token {
+                        token_type: TokenType::INT,
+                        literal: Some("1".to_string()),
+                    },
+                    expression: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("1".to_string()),
+                        },
+                        value: 1,
+                    }),
+                }),
+            ],
+        };
+
+        let (_bytes, pool) = compile_program(&program);
+        // only a single '1' should be stored
+        assert_eq!(pool, vec![1]);
+    }
+
+    #[test]
+    fn test_constant_pool_deduplicates_zero() {
+        // ensure multiple zeros are deduplicated
+        let program = Program {
+            statements: vec![
+                Box::new(ExpressionStatement {
+                    token: Token {
+                        token_type: TokenType::INT,
+                        literal: Some("0".to_string()),
+                    },
+                    expression: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("0".to_string()),
+                        },
+                        value: 0,
+                    }),
+                }),
+                Box::new(ExpressionStatement {
+                    token: Token {
+                        token_type: TokenType::INT,
+                        literal: Some("0".to_string()),
+                    },
+                    expression: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("0".to_string()),
+                        },
+                        value: 0,
+                    }),
+                }),
+            ],
+        };
+
+        let (_bytes, pool) = compile_program(&program);
+        assert_eq!(pool, vec![0]);
+    }
+
+    #[test]
+    fn test_compile_assignment_runtime() {
+        // let x = 10; x = 20;
+        let input = "let x = 10; x = 20;";
+        let mut lexer = crate::lexer::Lexer::new(input.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        crate::parser::check_parser_errors(&parser);
+
+        let mut compiler = Compiler::new();
+        let (bytes, pool, _last) = compiler.compile_statements(&program);
+
+        let mut vm = crate::vm::VM::new(bytes, pool);
+        vm.run();
+
+        let reg = compiler.get_symbol("x").expect("symbol x should exist");
+        assert_eq!(vm.frames[0].registers[reg as usize], 20);
     }
 }

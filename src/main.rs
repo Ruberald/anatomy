@@ -9,7 +9,9 @@ mod compiler;
 mod repl;
 
 fn main() {
-    let mut repl = repl::REPL::new();
+    // Initialize logger for debug output. Configure the level via RUST_LOG.
+    env_logger::init();
 
+    let mut repl = repl::REPL::new();
     repl.run();
 }
