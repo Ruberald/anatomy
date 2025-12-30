@@ -7,6 +7,7 @@ pub struct Compiler {
     pub program: Vec<u8>,
     next_register: u8,
     symbols: HashMap<String, u8>,
+    pub constant_pool: Vec<i64>,
 }
 
 impl Compiler {
@@ -15,11 +16,13 @@ impl Compiler {
             program: vec![],
             next_register: 0,
             symbols: HashMap::new(),
+            constant_pool: vec![],
         }
     }
 
-    /// Entry point: compile a Program into raw bytes for the VM.
-    pub fn compile_program(mut self, program: &Program) -> Vec<u8> {
+    pub fn compile_statements(&mut self, program: &Program) -> (Vec<u8>, Vec<i64>) {
+        self.program.clear();
+
         for stmt in &program.statements {
             self.compile_statement(stmt);
         }
@@ -27,7 +30,23 @@ impl Compiler {
         // Ensure program halts when done
         self.program.push(Opcode::HLT as u8);
 
-        self.program
+        println!("next_register: {}", self.next_register);
+        println!("symbols: {:?}", self.symbols);
+        println!("bytes: {:?}", self.program);
+
+        (self.program.clone(), self.constant_pool.clone())
+    }
+
+    /// Entry point: compile a Program into raw bytes for the VM.
+    pub fn compile_program(mut self, program: &Program) -> (Vec<u8>, Vec<i64>) {
+        for stmt in &program.statements {
+            self.compile_statement(stmt);
+        }
+
+        // Ensure program halts when done
+        self.program.push(Opcode::HLT as u8);
+
+        (self.program, self.constant_pool)
     }
 
     fn alloc_register(&mut self) -> u8 {
@@ -56,29 +75,34 @@ impl Compiler {
             return;
         }
 
-        // other statements: unimplemented
+        if let Some(_block) = stmt.as_any().downcast_ref::<BlockStatement>() {
+            // Not implemented yet; no-op
+        }
     }
 
     /// Compile an expression and return the register index holding the result.
     fn compile_expression(&mut self, expr: &Box<dyn Expression>) -> u8 {
         if let Some(int_lit) = expr.as_any().downcast_ref::<IntegerLiteral>() {
             let reg = self.alloc_register();
-            // LOAD reg imm16
+            // LOAD reg constant_pool_index
+            self.constant_pool.push(int_lit.value);
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
-            let value = int_lit.value as u16;
-            self.program.push(((value >> 8) & 0xFF) as u8);
-            self.program.push((value & 0xFF) as u8);
+            let index = (self.constant_pool.len() - 1) as u16;
+            self.program.push(((index >> 8) & 0xFF) as u8);
+            self.program.push((index & 0xFF) as u8);
             return reg;
         }
 
         if let Some(bool_lit) = expr.as_any().downcast_ref::<Boolean>() {
             let reg = self.alloc_register();
             let imm: u16 = if bool_lit.value { 1 } else { 0 };
+            self.constant_pool.push(imm as i64);
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
-            self.program.push(((imm >> 8) & 0xFF) as u8);
-            self.program.push((imm & 0xFF) as u8);
+            let index = (self.constant_pool.len() - 1) as u16;
+            self.program.push(((index >> 8) & 0xFF) as u8);
+            self.program.push((index & 0xFF) as u8);
             return reg;
         }
 
@@ -190,6 +214,158 @@ impl Compiler {
 }
 
 /// Convenience function: compile a Program into VM bytes
-pub fn compile_program(program: &Program) -> Vec<u8> {
+pub fn compile_program(program: &Program) -> (Vec<u8>, Vec<i64>) {
     Compiler::new().compile_program(program)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::lexer::{Token, TokenType};
+
+    #[test]
+    fn test_compile_integer_literal() {
+        let program = Program {
+            statements: vec![Box::new(ExpressionStatement {
+                token: Token {
+                    token_type: TokenType::INT,
+                    literal: Some("1".to_string()),
+                },
+                expression: Box::new(IntegerLiteral {
+                    token: Token {
+                        token_type: TokenType::INT,
+                        literal: Some("1".to_string()),
+                    },
+                    value: 1,
+                }),
+            })],
+        };
+
+        let (bytes, constant_pool) = compile_program(&program);
+
+        // Expected byte layout:
+        // LOAD reg0, 0x0001
+        // HLT
+        let expected = vec![
+            Opcode::LOAD as u8,
+            0u8, // register 0
+            0u8, // constant pool index high byte
+            0u8, // constant pool index low byte
+            Opcode::HLT as u8,
+        ];
+
+        assert_eq!(bytes, expected);
+        assert_eq!(constant_pool, vec![1]);
+    }
+
+    #[test]
+    fn test_compile_addition() {
+        // compile the expression: 1 + 2
+        let program = Program {
+            statements: vec![Box::new(ExpressionStatement {
+                token: Token {
+                    token_type: TokenType::INT,
+                    literal: Some("1".to_string()),
+                },
+                expression: Box::new(InfixExpression {
+                    token: Token {
+                        token_type: TokenType::PLUS,
+                        literal: Some("+".to_string()),
+                    },
+                    left: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("1".to_string()),
+                        },
+                        value: 1,
+                    }),
+                    operator: "+".to_string(),
+                    right: Box::new(IntegerLiteral {
+                        token: Token {
+                            token_type: TokenType::INT,
+                            literal: Some("2".to_string()),
+                        },
+                        value: 2,
+                    }),
+                }),
+            })],
+        };
+
+        let (bytes, pool) = compile_program(&program);
+
+        // Expected byte layout:
+        // LOAD reg0, 0x0001
+        // LOAD reg1, 0x0002
+        // ADD reg0, reg1, reg2
+        // HLT
+        let expected = vec![
+            Opcode::LOAD as u8,
+            0u8, // register 0
+            0u8, // constant pool index high byte
+            0u8, // constant pool index low byte
+            Opcode::LOAD as u8,
+            1u8, // register 1
+            0u8, // constant pool index high byte
+            1u8, // constant pool index low byte
+            Opcode::ADD as u8,
+            0u8, // left operand reg0
+            1u8, // right operand reg1
+            2u8, // destination reg2
+            Opcode::HLT as u8,
+        ];
+
+        assert_eq!(pool, vec![1, 2]);
+        assert_eq!(bytes, expected);
+    }
+
+    #[test]
+    fn test_let_then_identifier_uses_same_register() {
+        // let x = 1; x;
+        let let_stmt = LetStatement {
+            token: Token {
+                token_type: TokenType::LET,
+                literal: Some("let".to_string()),
+            },
+            name: Identifier {
+                token: Token {
+                    token_type: TokenType::IDENT,
+                    literal: Some("x".to_string()),
+                },
+                value: "x".to_string(),
+            },
+            value: Box::new(IntegerLiteral {
+                token: Token {
+                    token_type: TokenType::INT,
+                    literal: Some("1".to_string()),
+                },
+                value: 1,
+            }),
+        };
+
+        let expr_stmt = ExpressionStatement {
+            token: Token {
+                token_type: TokenType::IDENT,
+                literal: Some("x".to_string()),
+            },
+            expression: Box::new(Identifier {
+                token: Token {
+                    token_type: TokenType::IDENT,
+                    literal: Some("x".to_string()),
+                },
+                value: "x".to_string(),
+            }),
+        };
+
+        let program = Program {
+            statements: vec![Box::new(let_stmt), Box::new(expr_stmt)],
+        };
+
+        let bytes = compile_program(&program);
+
+        // Only a single LOAD should be emitted for the `let` value, the identifier
+        // expression should reuse the register and emit no additional bytes.
+        let expected = vec![Opcode::LOAD as u8, 0u8, 0u8, 1u8, Opcode::HLT as u8];
+
+        let bytes = compile_program(&program).0;
+    }
 }

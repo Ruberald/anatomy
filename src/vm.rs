@@ -1,48 +1,51 @@
 use crate::instruction::Opcode;
 
+pub struct CallFrame {
+    pub pc: usize,
+    pub registers: [i64; 32],
+}
+
 pub struct VM {
-    pub registers: [i32; 32],
-    pc: usize,
+    pub frames: Vec<CallFrame>,
     pub program: Vec<u8>,
     remainder: u32,
-    equal_flag: bool,
+    pub equal_flag: bool,
+    pub constant_pool: Vec<i64>,
 }
 
 impl VM {
-    pub fn new() -> Self {
+    pub fn new(bytes: Vec<u8>, constant_pool: Vec<i64>) -> Self {
         VM {
-            registers: [0; 32],
-            pc: 0,
-            program: vec![],
+            frames: vec![CallFrame {
+                pc: 0,
+                registers: [0; 32],
+            }],
+            program: bytes,
             remainder: 0,
             equal_flag: false,
+            constant_pool,
         }
     }
 
-    /// Replace the VM's program and reset the program counter.
-    pub fn load_program(&mut self, bytes: Vec<u8>) {
-        self.program = bytes;
-        self.pc = 0;
-        self.remainder = 0;
-        self.equal_flag = false;
-    }
-
     fn decode_opcode(&mut self) -> Opcode {
-        let opcode = Opcode::from(self.program[self.pc]);
-        self.pc += 1;
+        let frame = self.frames.last_mut().unwrap();
+        let opcode = Opcode::from(self.program[frame.pc]);
+        frame.pc += 1;
         // println!("{:?}", opcode);
         opcode
     }
 
     fn next_8_bits(&mut self) -> u8 {
-        let result = self.program[self.pc];
-        self.pc += 1;
+        let frame = self.frames.last_mut().unwrap();
+        let result = self.program[frame.pc];
+        frame.pc += 1;
         result
     }
 
     fn next_16_bits(&mut self) -> u16 {
-        let result = ((self.program[self.pc] as u16) << 8) | self.program[self.pc + 1] as u16;
-        self.pc += 2;
+        let frame = self.frames.last_mut().unwrap();
+        let result = ((self.program[frame.pc] as u16) << 8) | self.program[frame.pc + 1] as u16;
+        frame.pc += 2;
         result
     }
 
@@ -60,16 +63,18 @@ impl VM {
     }
 
     fn execute_instruction(&mut self) -> bool {
-        if self.pc >= self.program.len() {
+        if self.frames.last().unwrap().pc >= self.program.len() {
             return true;
         }
 
         match self.decode_opcode() {
             Opcode::LOAD => {
                 let register = self.next_8_bits() as usize;
-                let number = self.next_16_bits() as u32;
+                let index = self.next_16_bits() as usize;
+                let number = self.constant_pool[index];
                 println!("Loading {number} into register {register}");
-                self.registers[register] = number as i32;
+                let frame = self.frames.last_mut().unwrap();
+                frame.registers[register] = number;
             }
 
             Opcode::HLT => {
@@ -78,109 +83,140 @@ impl VM {
             }
 
             Opcode::ADD => {
-                let register1 = self.registers[self.next_8_bits() as usize];
-                let register2 = self.registers[self.next_8_bits() as usize];
-                self.registers[self.next_8_bits() as usize] = register1 + register2;
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let dest = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.registers[dest] = frame.registers[r1] + frame.registers[r2];
             }
 
             Opcode::SUB => {
-                let register1 = self.registers[self.next_8_bits() as usize];
-                let register2 = self.registers[self.next_8_bits() as usize];
-                self.registers[self.next_8_bits() as usize] = register1 - register2;
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let dest = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.registers[dest] = frame.registers[r1] - frame.registers[r2];
             }
 
             Opcode::MUL => {
-                let register1 = self.registers[self.next_8_bits() as usize];
-                let register2 = self.registers[self.next_8_bits() as usize];
-                self.registers[self.next_8_bits() as usize] = register1 * register2;
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let dest = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.registers[dest] = frame.registers[r1] * frame.registers[r2];
             }
 
             Opcode::DIV => {
-                let register1 = self.registers[self.next_8_bits() as usize];
-                let register2 = self.registers[self.next_8_bits() as usize];
-                self.registers[self.next_8_bits() as usize] = register1 / register2;
-                self.remainder = (register1 % register2) as u32;
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let dest = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.registers[dest] = frame.registers[r1] / frame.registers[r2];
+                self.remainder = (frame.registers[r1] % frame.registers[r2]) as u32;
             }
 
             Opcode::JMP => {
-                self.pc = self.registers[self.next_8_bits() as usize] as usize;
+                let reg_idx = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.pc = frame.registers[reg_idx] as usize;
             }
 
             Opcode::JMPF => {
-                self.pc += self.registers[self.next_8_bits() as usize] as usize;
+                let reg_idx = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.pc += frame.registers[reg_idx] as usize;
             }
 
             Opcode::JMPB => {
-                self.pc -= self.registers[self.next_8_bits() as usize] as usize;
+                let reg_idx = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                frame.pc -= frame.registers[reg_idx] as usize;
             }
 
             Opcode::EQ => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                // padding byte (VM design quirk)
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 println!("{op1} == {op2}");
 
                 self.equal_flag = op1 == op2;
-
-                self.next_8_bits();
             }
 
             Opcode::NEQ => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 self.equal_flag = op1 != op2;
-
-                self.next_8_bits();
             }
 
             Opcode::GT => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 self.equal_flag = op1 > op2;
-
-                self.next_8_bits();
             }
 
             Opcode::GTQ => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 self.equal_flag = op1 >= op2;
-
-                self.next_8_bits();
             }
 
             Opcode::LT => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 self.equal_flag = op1 < op2;
-
-                self.next_8_bits();
             }
 
             Opcode::LTQ => {
-                let op1 = self.registers[self.next_8_bits() as usize];
-                let op2 = self.registers[self.next_8_bits() as usize];
+                let r1 = self.next_8_bits() as usize;
+                let r2 = self.next_8_bits() as usize;
+                let _ = self.next_8_bits();
+                let frame = self.frames.last_mut().unwrap();
+                let op1 = frame.registers[r1];
+                let op2 = frame.registers[r2];
 
                 self.equal_flag = op1 <= op2;
-
-                self.next_8_bits();
             }
 
             Opcode::JEQ => {
-                let target = self.registers[self.next_8_bits() as usize] as usize;
+                let reg_idx = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                let target = frame.registers[reg_idx] as usize;
                 if self.equal_flag {
-                    self.pc = target;
+                    frame.pc = target;
                 }
             }
 
             Opcode::JNEQ => {
-                let target = self.registers[self.next_8_bits() as usize] as usize;
+                let reg_idx = self.next_8_bits() as usize;
+                let frame = self.frames.last_mut().unwrap();
+                let target = frame.registers[reg_idx] as usize;
                 if !self.equal_flag {
-                    self.pc = target;
+                    frame.pc = target;
                 }
             }
 
@@ -199,46 +235,46 @@ mod tests {
 
     #[test]
     fn test_create_vm() {
-        let test_vm = VM::new();
-        assert_eq!(test_vm.registers[0], 0)
+        let test_vm = VM::new(vec![], vec![]);
+        assert_eq!(test_vm.frames[0].registers[0], 0)
     }
 
     #[test]
     fn test_opcode_hlt() {
-        let mut test_vm = VM::new();
+        let mut test_vm = VM::new(vec![], vec![]);
         let test_bytes = vec![5, 0, 0, 0];
         test_vm.program = test_bytes;
         test_vm.run_once();
-        assert_eq!(test_vm.pc, 1);
+        assert_eq!(test_vm.frames[0].pc, 1);
     }
 
     #[test]
     fn test_opcode_igl() {
-        let mut test_vm = VM::new();
         let test_bytes = vec![200, 0, 0, 0];
+        let mut test_vm = VM::new(test_bytes.clone(), vec![]);
         test_vm.program = test_bytes;
         test_vm.run();
-        assert_eq!(test_vm.pc, 1);
+        assert_eq!(test_vm.frames[0].pc, 1);
     }
 
     #[test]
     fn test_jmp_opcode() {
-        let mut test_vm = VM::new();
-        test_vm.registers[0] = 1;
+        let mut test_vm = VM::new(vec![], vec![]);
+        test_vm.frames[0].registers[0] = 1;
         test_vm.program = vec![6, 0, 0, 0];
         test_vm.run_once();
-        assert_eq!(test_vm.pc, 1);
+        assert_eq!(test_vm.frames[0].pc, 1);
     }
 
     #[test]
     fn test_eq_opcode() {
-        let mut test_vm = VM::new();
-        test_vm.registers[0] = 10;
-        test_vm.registers[1] = 10;
+        let mut test_vm = VM::new(vec![], vec![]);
+        test_vm.frames[0].registers[0] = 10;
+        test_vm.frames[0].registers[1] = 10;
         test_vm.program = vec![9, 0, 1, 0, 9, 0, 1, 0];
         test_vm.run_once();
         assert!(test_vm.equal_flag);
-        test_vm.registers[1] = 20;
+        test_vm.frames[0].registers[1] = 20;
         test_vm.run_once();
         assert!(!test_vm.equal_flag);
     }

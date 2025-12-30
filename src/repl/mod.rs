@@ -2,6 +2,7 @@ use std::io;
 use std::io::Write;
 
 use crate::ast::Node;
+use crate::compiler::Compiler;
 use crate::lexer::Lexer;
 use crate::lexer::TokenType;
 use crate::parser::check_parser_errors;
@@ -15,14 +16,16 @@ pub enum ReplMode {
 pub struct REPL {
     command_buffer: Vec<String>,
     vm: VM,
+    compiler: Compiler,
     mode: ReplMode,
 }
 
 impl REPL {
     pub fn new() -> REPL {
         REPL {
-            vm: VM::new(),
+            vm: VM::new(vec![], vec![]),
             command_buffer: vec![],
+            compiler: Compiler::new(),
             mode: ReplMode::Normal,
         }
     }
@@ -95,7 +98,7 @@ impl REPL {
 
                 ".registers" => {
                     println!("Listing registers and all contents:");
-                    println!("{:#?}", self.vm.registers);
+                    println!("{:#?}", self.vm.frames[0].registers);
                     println!("End of Register Listing")
                 }
 
@@ -123,12 +126,13 @@ impl REPL {
                         check_parser_errors(&parser);
 
                         // Compile program into VM bytecode and run it
-                        let bytes = crate::compiler::compile_program(&program);
+                        let (bytes, pool) = crate::compiler::compile_program(&program);
                         if !bytes.is_empty() {
                             // Replace VM program with compiled bytes and run
-                            self.vm.load_program(bytes);
+                            self.vm.program = bytes;
+                            self.vm.constant_pool = pool;
                             self.vm.run();
-                            println!("Registers after run: {:#?}", self.vm.registers);
+                            println!("Registers after run: {:#?}", self.vm.frames[0].registers);
                         }
                     }
                 },
@@ -193,11 +197,14 @@ mod tests {
         let mut repl = REPL::new();
 
         // LOAD R0 = 10   → 00 00 00 0A
-        let mut bytes = repl.parse_hex("00 00 00 0A").unwrap();
+        // LOAD R0 constant_pool_index(0) -> 00 00 00 00
+        repl.vm.constant_pool.push(10);
+        let mut bytes = repl.parse_hex("00 00 00 00").unwrap();
         repl.vm.program.append(&mut bytes);
 
-        // LOAD R1 = 20   → 00 01 00 14
-        let mut bytes = repl.parse_hex("00 01 00 14").unwrap();
+        // LOAD R1 constant_pool_index(1) -> 00 01 00 01
+        repl.vm.constant_pool.push(20);
+        let mut bytes = repl.parse_hex("00 01 00 01").unwrap();
         repl.vm.program.append(&mut bytes);
 
         // ADD R2 = R0 + R1 → 01 00 01 02
@@ -212,8 +219,51 @@ mod tests {
         repl.vm.run();
 
         // Validate results
-        assert_eq!(repl.vm.registers[0], 0x0A, "R0 should be 10");
-        assert_eq!(repl.vm.registers[1], 0x14, "R1 should be 20");
-        assert_eq!(repl.vm.registers[2], 0x1E, "R2 should contain 30");
+        assert_eq!(repl.vm.frames[0].registers[0], 0x0A, "R0 should be 10");
+        assert_eq!(repl.vm.frames[0].registers[1], 0x14, "R1 should be 20");
+        assert_eq!(repl.vm.frames[0].registers[2], 0x1E, "R2 should contain 30");
+    }
+
+    // -------------------------------
+    // VM INTEGRATION TEST
+    // Ensure normal mode program is run properly
+    // -------------------------------
+    #[test]
+    fn test_repl_normal_program_execution_load_and_add() {
+        use crate::repl::REPL;
+
+        let mut repl = REPL::new();
+
+        let input_program = "
+            let f = false;
+            let t = true;
+            let a = 10;
+            let b = 20;
+            let c = a + b;
+        ";
+        // let d = t && f;
+
+        let mut lexer = Lexer::new(input_program.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        let (bytes, pool) = crate::compiler::compile_program(&program);
+        repl.vm.program = bytes;
+        repl.vm.constant_pool = pool;
+
+        // Run the program
+        repl.vm.run();
+
+        // Validate results
+        assert_eq!(repl.vm.frames[0].registers[0], 0, "R1 should be false (0)");
+        assert_eq!(repl.vm.frames[0].registers[1], 1, "R0 should be true (1)");
+        assert_eq!(repl.vm.frames[0].registers[2], 10, "R2 should be 10");
+        assert_eq!(repl.vm.frames[0].registers[3], 20, "R3 should be 20");
+        assert_eq!(
+            repl.vm.frames[0].registers[4], 30,
+            "R4 should be 30 from 10 + 20"
+        );
+        // assert_eq!( repl.vm.frames[0].registers[5], 0, "R5 should be false (0) from true && false");
     }
 }
