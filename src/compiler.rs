@@ -65,7 +65,10 @@ impl Compiler {
             // Allocate a register for the `let` binding and compile the value into it.
             let reg = self.alloc_register();
             let _ = self.compile_expression_dest(&let_stmt.value, Some(reg));
-            self.symbols.insert(let_stmt.name.value.clone(), reg);
+            // Do not overwrite an existing symbol mapping; keep the first
+            // binding encountered for a given name so later conditional
+            // branches don't clobber earlier runtime-visible bindings.
+            self.symbols.entry(let_stmt.name.value.clone()).or_insert(reg);
             return;
         }
 
@@ -329,20 +332,27 @@ impl Compiler {
                 self.alloc_register()
             };
 
-            // compile consequence: if the last statement is an expression, compile it into dest
-            if let Some((last_idx, _)) = if_expr.consequence.statements.iter().enumerate().last() {
-                let count = if_expr.consequence.statements.len();
-                if count > 0 {
-                    for (i, stmt) in if_expr.consequence.statements.iter().enumerate() {
-                        if i + 1 == count && let Some(expr_stmt) =
-                                stmt.as_any().downcast_ref::<ExpressionStatement>() {
-                                let _ =
-                                    self.compile_expression_dest(&expr_stmt.expression, Some(dest));
-                                continue;
-                            }
-                        self.compile_statement(stmt);
-                    }
-                }
+            // Determine if the condition is a compile-time boolean literal.
+            // If it's known (true/false) we may commit symbols created in the
+            // corresponding branch into the parent symbol table. If unknown,
+            // compile branches in an isolated symbol table so branch-local
+            // `let` bindings don't leak into the outer scope.
+            let const_condition = if_expr
+                .condition
+                .as_any()
+                .downcast_ref::<Boolean>()
+                .map(|b| b.value);
+
+            // We'll use a helper method `compile_block` (defined below) to
+            // compile blocks with controlled symbol scoping. This avoids
+            // borrowing `self` mutably inside a closure here which caused
+            // borrow-checker conflicts.
+
+            // Compile consequence. If the condition is a compile-time `true`,
+            // commit symbol changes from the consequence; otherwise isolate them.
+            let consequence_commit = matches!(const_condition, Some(true));
+            if let Some(_) = if_expr.consequence.statements.iter().enumerate().next_back() {
+                self.compile_block(&if_expr.consequence, consequence_commit, dest);
             }
 
             if let Some(alt_block) = &if_expr.alternative {
@@ -362,19 +372,11 @@ impl Compiler {
 
                 // alternative start position
                 let alt_start = self.program.len();
-                // If last statement is an expression, compile it into dest
-                let count = alt_block.statements.len();
-                if count > 0 {
-                    for (i, stmt) in alt_block.statements.iter().enumerate() {
-                        if i + 1 == count && let Some(expr_stmt) =
-                                stmt.as_any().downcast_ref::<ExpressionStatement>() {
-                                let _ =
-                                    self.compile_expression_dest(&expr_stmt.expression, Some(dest));
-                                continue;
-                            }
-                        self.compile_statement(stmt);
-                    }
-                }
+                // If the condition is a compile-time `false`, commit the
+                // alternative's symbol changes to the parent; otherwise
+                // isolate them so branch-local lets don't leak.
+                let alternative_commit = matches!(const_condition, Some(false));
+                self.compile_block(alt_block, alternative_commit, dest);
                 let alt_end = self.program.len();
 
                 // backpatch placeholders with actual addresses
@@ -397,6 +399,41 @@ impl Compiler {
         self.program.push(0);
         self.program.push(0);
         reg
+    }
+
+    fn compile_block(&mut self, block: &BlockStatement, commit: bool, dest: u8) {
+        if commit {
+            let count = block.statements.len();
+            if count > 0 {
+                for (i, stmt) in block.statements.iter().enumerate() {
+                    if i + 1 == count {
+                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>() {
+                            let _ = self.compile_expression_dest(&expr_stmt.expression, Some(dest));
+                            continue;
+                        }
+                    }
+                    self.compile_statement(stmt);
+                }
+            }
+        } else {
+            let saved_symbols = self.symbols.clone();
+            // Use a copy so lookups for outer symbols still succeed
+            self.symbols = saved_symbols.clone();
+            let count = block.statements.len();
+            if count > 0 {
+                for (i, stmt) in block.statements.iter().enumerate() {
+                    if i + 1 == count {
+                        if let Some(expr_stmt) = stmt.as_any().downcast_ref::<ExpressionStatement>() {
+                            let _ = self.compile_expression_dest(&expr_stmt.expression, Some(dest));
+                            continue;
+                        }
+                    }
+                    self.compile_statement(stmt);
+                }
+            }
+            // discard symbol changes from the branch
+            self.symbols = saved_symbols;
+        }
     }
 }
 

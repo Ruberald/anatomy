@@ -363,7 +363,11 @@ mod tests {
     fn test_repl_if_statement_with_let_inside_runtime() {
         let mut repl = REPL::new();
 
-        let input_program = "if (true) { let x = 10; }";
+        let input_program = "
+            if (true) { let x = 10; };
+            if (false) { let x = 20; };
+            if (false) { let y = 30; };;
+        ";
 
         let mut lexer = Lexer::new(input_program.to_string());
         let mut parser = crate::parser::Parser::new(lexer);
@@ -380,9 +384,13 @@ mod tests {
             .compiler
             .get_symbol("x")
             .expect("symbol x should exist");
+
         assert_eq!(
             repl.vm.frames[0].registers[reg as usize], 10,
             "inner x should be 10"
         );
+
+        let reg_y = repl.compiler.get_symbol("y");
+        assert!(reg_y.is_none(), "symbol y should not exist");
     }
 }
