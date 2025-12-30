@@ -59,7 +59,9 @@ impl Compiler {
     fn compile_statement(&mut self, stmt: &Box<dyn Statement>) {
         // Downcast to concrete statements we support
         if let Some(let_stmt) = stmt.as_any().downcast_ref::<LetStatement>() {
-            let reg = self.compile_expression(&let_stmt.value);
+            // Allocate a register for the `let` binding and compile the value into it.
+            let reg = self.alloc_register();
+            let _ = self.compile_expression_dest(&let_stmt.value, Some(reg));
             self.symbols.insert(let_stmt.name.value.clone(), reg);
             return;
         }
@@ -83,8 +85,18 @@ impl Compiler {
 
     /// Compile an expression and return the register index holding the result.
     fn compile_expression(&mut self, expr: &Box<dyn Expression>) -> u8 {
+        self.compile_expression_dest(expr, None)
+    }
+
+    /// Compile an expression, optionally writing the result into `into` register.
+    /// Returns the register index containing the result.
+    fn compile_expression_dest(&mut self, expr: &Box<dyn Expression>, into: Option<u8>) -> u8 {
         if let Some(int_lit) = expr.as_any().downcast_ref::<IntegerLiteral>() {
-            let reg = self.alloc_register();
+            let reg = if let Some(d) = into {
+                d
+            } else {
+                self.alloc_register()
+            };
             // LOAD reg constant_pool_index
             self.constant_pool.push(int_lit.value);
             self.program.push(Opcode::LOAD as u8);
@@ -96,7 +108,11 @@ impl Compiler {
         }
 
         if let Some(bool_lit) = expr.as_any().downcast_ref::<Boolean>() {
-            let reg = self.alloc_register();
+            let reg = if let Some(d) = into {
+                d
+            } else {
+                self.alloc_register()
+            };
             let imm: u16 = if bool_lit.value { 1 } else { 0 };
             self.constant_pool.push(imm as i64);
             self.program.push(Opcode::LOAD as u8);
@@ -109,10 +125,17 @@ impl Compiler {
 
         if let Some(ident) = expr.as_any().downcast_ref::<Identifier>() {
             if let Some(&reg) = self.symbols.get(&ident.value) {
+                // If a destination was requested and differs, we currently
+                // don't emit a register-to-register move; just return the
+                // existing symbol register.
                 return reg;
             }
             // unknown ident -> load 0
-            let reg = self.alloc_register();
+            let reg = if let Some(d) = into {
+                d
+            } else {
+                self.alloc_register()
+            };
             self.program.push(Opcode::LOAD as u8);
             self.program.push(reg);
             self.program.push(0);
@@ -122,15 +145,23 @@ impl Compiler {
 
         if let Some(prefix) = expr.as_any().downcast_ref::<PrefixExpression>() {
             // only support -X by computing 0 - X
-            let right_reg = self.compile_expression(&prefix.right);
+            let right_reg = self.compile_expression_dest(&prefix.right, None);
             if prefix.operator == "-" {
-                let zero_reg = self.alloc_register();
+                let zero_reg = if let Some(d) = into {
+                    d
+                } else {
+                    self.alloc_register()
+                };
                 self.program.push(Opcode::LOAD as u8);
                 self.program.push(zero_reg);
                 self.program.push(0);
                 self.program.push(0);
 
-                let dest = self.alloc_register();
+                let dest = if let Some(d) = into {
+                    d
+                } else {
+                    self.alloc_register()
+                };
                 // SUB zero_reg, right_reg, dest
                 self.program.push(Opcode::SUB as u8);
                 self.program.push(zero_reg);
@@ -143,18 +174,10 @@ impl Compiler {
         }
 
         if let Some(infix) = expr.as_any().downcast_ref::<InfixExpression>() {
-            // Remember how many registers were allocated before compiling subexpressions.
-            // If the left side allocates a new temporary register (i.e. its register
-            // index is >= start_next), we can reuse that register as the destination
-            // for the outer operation to avoid unnecessary temporaries.
             let start_next = self.next_register;
-            let left = self.compile_expression(&infix.left);
-            let right = self.compile_expression(&infix.right);
+            let left = self.compile_expression_dest(&infix.left, None);
+            let right = self.compile_expression_dest(&infix.right, None);
 
-            // Only reuse the left register as destination when the left expression
-            // is itself a composite expression (e.g. an infix or prefix) that
-            // produced a temporary register during this call. This avoids
-            // overwriting simple literal/identifier registers like for `1 + 2`.
             let left_is_composite = infix
                 .left
                 .as_any()
@@ -166,7 +189,9 @@ impl Compiler {
                     .downcast_ref::<PrefixExpression>()
                     .is_some();
 
-            let dest = if left >= start_next && left_is_composite {
+            let dest = if let Some(d) = into {
+                d
+            } else if left >= start_next && left_is_composite {
                 left
             } else {
                 self.alloc_register()
@@ -174,34 +199,34 @@ impl Compiler {
 
             match infix.operator.as_str() {
                 "+" => {
+                    println!("COMPILE INFIX '+' left={} right={}", left, right);
                     self.program.push(Opcode::ADD as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "-" => {
+                    println!("COMPILE INFIX '-' left={} right={}", left, right);
                     self.program.push(Opcode::SUB as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "*" => {
+                    println!("COMPILE INFIX '*' left={} right={}", left, right);
                     self.program.push(Opcode::MUL as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "/" => {
+                    println!("COMPILE INFIX '/' left={} right={}", left, right);
                     self.program.push(Opcode::DIV as u8);
                     self.program.push(left);
                     self.program.push(right);
                     self.program.push(dest);
                 }
                 "==" | "!=" | ">" | "<" | ">=" | "<=" => {
-                    // The VM currently exposes flags but not boolean-result-into-register.
-                    // We can set the equal_flag using the appropriate opcode, but we don't
-                    // have a move-from-flag instruction. For now, compile comparisons by
-                    // emitting the comparison opcode (which sets flags) and leave dest=0.
                     let opcode = match infix.operator.as_str() {
                         "==" => Opcode::EQ,
                         "!=" => Opcode::NEQ,
@@ -214,13 +239,10 @@ impl Compiler {
                     self.program.push(opcode as u8);
                     self.program.push(left);
                     self.program.push(right);
-                    // opcode implementations read an extra byte after two operands; add padding
                     self.program.push(0);
-                    // return a register containing 0 (no reliable boolean value as register)
                     return dest;
                 }
                 _ => {
-                    // unsupported operator: no-op, return left
                     return left;
                 }
             }
@@ -241,6 +263,7 @@ impl Compiler {
 
 /// Convenience function: compile a Program into VM bytes
 pub fn compile_program(program: &Program) -> (Vec<u8>, Vec<i64>) {
+    // Temporarily use the debug printing version to inspect generated bytecode
     Compiler::new().compile_program(program)
 }
 
