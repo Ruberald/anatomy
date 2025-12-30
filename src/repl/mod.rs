@@ -4,7 +4,6 @@ use std::io::Write;
 use crate::ast::Node;
 use crate::compiler::Compiler;
 use crate::lexer::Lexer;
-use crate::lexer::TokenType;
 use crate::parser::check_parser_errors;
 use crate::vm::VM;
 
@@ -295,6 +294,95 @@ mod tests {
         assert_eq!(
             repl.vm.frames[0].registers[0], 75,
             "R0 should be 75 from (5 + 10) * (2 + 3)"
+        );
+    }
+
+    #[test]
+    fn test_repl_if_expression_in_let_runtime() {
+        let mut repl = REPL::new();
+
+        let input_program = "
+            let x = if (true) { 10 } else { 20 };
+            let y = if (false) { 10 } else { 20 };
+            let z = if (10 > 5) { 30 } else { 40 };
+            let zz = if (5 > 10) { 30 } else { 40 };
+        ";
+
+        let mut lexer = Lexer::new(input_program.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        let (bytes, pool) = repl.compiler.compile_statements(&program);
+        repl.vm.program = bytes;
+        repl.vm.constant_pool = pool;
+
+        // Run the compiled program on the VM
+        repl.vm.run();
+
+        // 'x' was registered by the compiler; look up its register index
+        let reg_x = repl
+            .compiler
+            .get_symbol("x")
+            .expect("symbol x should exist");
+
+        let reg_y = repl
+            .compiler
+            .get_symbol("y")
+            .expect("symbol y should exist");
+
+        let reg_z = repl
+            .compiler
+            .get_symbol("z")
+            .expect("symbol z should exist");
+
+        let reg_zz = repl
+            .compiler
+            .get_symbol("zz")
+            .expect("symbol zz should exist");
+
+        assert_eq!(
+            repl.vm.frames[0].registers[reg_x as usize], 10,
+            "x should be 10"
+        );
+        assert_eq!(
+            repl.vm.frames[0].registers[reg_y as usize], 20,
+            "y should be 20"
+        );
+        assert_eq!(
+            repl.vm.frames[0].registers[reg_z as usize], 30,
+            "z should be 30"
+        );
+        assert_eq!(
+            repl.vm.frames[0].registers[reg_zz as usize], 40,
+            "zz should be 40"
+        );
+    }
+
+    #[test]
+    fn test_repl_if_statement_with_let_inside_runtime() {
+        let mut repl = REPL::new();
+
+        let input_program = "if (true) { let x = 10; }";
+
+        let mut lexer = Lexer::new(input_program.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        let (bytes, pool) = repl.compiler.compile_statements(&program);
+        repl.vm.program = bytes;
+        repl.vm.constant_pool = pool;
+
+        repl.vm.run();
+
+        let reg = repl
+            .compiler
+            .get_symbol("x")
+            .expect("symbol x should exist");
+        assert_eq!(
+            repl.vm.frames[0].registers[reg as usize], 10,
+            "inner x should be 10"
         );
     }
 }
