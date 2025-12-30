@@ -143,9 +143,34 @@ impl Compiler {
         }
 
         if let Some(infix) = expr.as_any().downcast_ref::<InfixExpression>() {
+            // Remember how many registers were allocated before compiling subexpressions.
+            // If the left side allocates a new temporary register (i.e. its register
+            // index is >= start_next), we can reuse that register as the destination
+            // for the outer operation to avoid unnecessary temporaries.
+            let start_next = self.next_register;
             let left = self.compile_expression(&infix.left);
             let right = self.compile_expression(&infix.right);
-            let dest = self.alloc_register();
+
+            // Only reuse the left register as destination when the left expression
+            // is itself a composite expression (e.g. an infix or prefix) that
+            // produced a temporary register during this call. This avoids
+            // overwriting simple literal/identifier registers like for `1 + 2`.
+            let left_is_composite = infix
+                .left
+                .as_any()
+                .downcast_ref::<InfixExpression>()
+                .is_some()
+                || infix
+                    .left
+                    .as_any()
+                    .downcast_ref::<PrefixExpression>()
+                    .is_some();
+
+            let dest = if left >= start_next && left_is_composite {
+                left
+            } else {
+                self.alloc_register()
+            };
 
             match infix.operator.as_str() {
                 "+" => {
@@ -361,12 +386,12 @@ mod tests {
             statements: vec![Box::new(let_stmt), Box::new(expr_stmt)],
         };
 
-        let bytes = compile_program(&program);
-
         // Only a single LOAD should be emitted for the `let` value, the identifier
         // expression should reuse the register and emit no additional bytes.
-        let expected = vec![Opcode::LOAD as u8, 0u8, 0u8, 1u8, Opcode::HLT as u8];
+        let expected = vec![Opcode::LOAD as u8, 0u8, 0u8, 0u8, Opcode::HLT as u8];
 
         let bytes = compile_program(&program).0;
+
+        assert_eq!(bytes, expected);
     }
 }

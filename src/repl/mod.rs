@@ -239,6 +239,7 @@ mod tests {
             let a = 10;
             let b = 20;
             let c = a + b;
+            let d = a * b + c;
         ";
         // let d = t && f;
 
@@ -263,6 +264,37 @@ mod tests {
             repl.vm.frames[0].registers[4], 30,
             "R4 should be 30 from 10 + 20"
         );
+        assert_eq!(
+            repl.vm.frames[0].registers[5], 230,
+            "R5 should be 230 from 10 * 20 + 30"
+        );
         // assert_eq!( repl.vm.frames[0].registers[5], 0, "R5 should be false (0) from true && false");
+    }
+
+    #[test]
+    fn test_normal_mode_complex_expression() {
+        let mut repl = REPL::new();
+
+        let input_program = "
+            let result = (5 + 10) * (2 + 3);
+        ";
+
+        let mut lexer = Lexer::new(input_program.to_string());
+        let mut parser = crate::parser::Parser::new(lexer);
+        let program = parser.parse_program();
+        check_parser_errors(&parser);
+
+        let (bytes, pool) = crate::compiler::compile_program(&program);
+        repl.vm.program = bytes;
+        repl.vm.constant_pool = pool;
+
+        // Run the program
+        repl.vm.run();
+
+        // Validate results
+        assert_eq!(
+            repl.vm.frames[0].registers[0], 75,
+            "R0 should be 75 from (5 + 10) * (2 + 3)"
+        );
     }
 }
